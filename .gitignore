@@ -1,0 +1,43 @@
+# Environment
+.env
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Data (không đẩy dữ liệu thô/kết quả lên git)
+data/raw/*
+data/processed/*
+data/outputs/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/outputs/.gitkeep
+data/uploads/*
+!data/uploads/.gitkeep
+data/ground_truth/*
+!data/ground_truth/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights (nếu PaddleOCR/VietOCR tải về local)
+*.pdparams
+*.pdiparams
+*.pth
+
+# Logs
+*.log
+.streamlit/secrets.toml
