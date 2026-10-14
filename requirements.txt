@@ -8,7 +8,7 @@ PyMuPDF==1.24.10 # Thư viện đọc/xử lý file PDF hiệu năng cao (trích
 paddlepaddle==2.6.2 # Framework AI nền tảng chạy mô hình PaddleOCR
 paddleocr==2.8.1 # Dùng làm Text Detector (phát hiện vị trí các dòng chữ trên hóa đơn)
 vietocr==0.3.13 # Dùng để lọc text có nội dung tiếng Việt
-torch==2.4. # # Framework PyTorch làm nền tảng chạy mô hình VietOCR
+torch==2.4.0 # Framework PyTorch làm nền tảng chạy mô hình VietOCR
 torchvision==0.19.1
 
 google-genai==0.3.0 # Gọi API để biến text thô thành JSON
