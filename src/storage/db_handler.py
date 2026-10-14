@@ -284,10 +284,18 @@ def get_upload_duplicate_candidates(source_hash: str, file_name: str) -> list[di
         rows = conn.execute(
             text("""
                 SELECT j.id AS job_id, j.file_name, j.source_image, j.source_hash,
-                       j.status, j.invoice_id, i.so_hoa_don, i.ngay_lap,
-                       i.tong_thanh_toan
+                       j.status, COALESCE(j.invoice_id, i.id) AS invoice_id,
+                       i.so_hoa_don, i.ngay_lap, i.tong_thanh_toan
                 FROM processing_jobs j
-                LEFT JOIN invoices i ON j.invoice_id = i.id
+                LEFT JOIN invoices i ON i.id = COALESCE(
+                    j.invoice_id,
+                    (
+                        SELECT MIN(i2.id)
+                        FROM invoices i2
+                        WHERE j.source_hash IS NOT NULL
+                          AND i2.source_hash = j.source_hash
+                    )
+                )
                 WHERE j.source_hash = :source_hash OR j.file_name = :file_name
                 ORDER BY j.created_at DESC
             """),
@@ -303,6 +311,20 @@ def mark_job_success(job_id: int, invoice_id: int) -> None:
             text("""
                 UPDATE processing_jobs
                 SET status = 'success', invoice_id = :invoice_id, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+            """),
+            {"invoice_id": invoice_id, "id": job_id},
+        )
+
+
+def mark_job_duplicate(job_id: int, invoice_id: int) -> None:
+    engine = _make_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                UPDATE processing_jobs
+                SET status = 'duplicate', invoice_id = :invoice_id,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = :id
             """),
             {"invoice_id": invoice_id, "id": job_id},
@@ -351,7 +373,13 @@ def get_job_counts() -> dict:
         rows = conn.execute(
             text("SELECT status, COUNT(*) FROM processing_jobs GROUP BY status")
         ).fetchall()
-    counts = {"processing": 0, "success": 0, "failed": 0, "cancelled": 0}
+    counts = {
+        "processing": 0,
+        "success": 0,
+        "duplicate": 0,
+        "failed": 0,
+        "cancelled": 0,
+    }
     for status, cnt in rows:
         counts[status] = cnt
     return counts
@@ -397,15 +425,153 @@ def get_full_history() -> list[dict]:
     with engine.begin() as conn:
         rows = conn.execute(text("""
             SELECT
-                j.id AS job_id, j.file_name, j.source_image, j.source_hash, j.status,
+                j.id AS job_id, j.file_name, j.source_image, j.source_hash,
+                CASE
+                    WHEN j.status = 'success' AND j.invoice_id IS NULL
+                         AND i.id IS NOT NULL AND i.created_at < j.created_at
+                        THEN 'duplicate'
+                    ELSE j.status
+                END AS status,
                 j.error_reason, j.error_message, j.created_at,
                 i.ma_so_thue_ban, i.ten_cong_ty_ban, i.so_hoa_don,
                 i.ngay_lap, i.tong_thanh_toan
             FROM processing_jobs j
-            LEFT JOIN invoices i ON j.invoice_id = i.id
+            LEFT JOIN invoices i ON i.id = COALESCE(
+                j.invoice_id,
+                (
+                    SELECT MIN(i2.id)
+                    FROM invoices i2
+                    WHERE j.source_hash IS NOT NULL
+                      AND i2.source_hash = j.source_hash
+                )
+            )
             ORDER BY j.created_at DESC
         """)).mappings().fetchall()
     return [dict(row) for row in rows]
+
+
+def _duplicate_cleanup_ids(conn) -> tuple[set[int], set[int]]:
+    from src.structuring.duplicate_detection import (
+        AMOUNT_TOLERANCE,
+        _normalize_amount,
+        _normalize_date,
+        find_duplicate_groups,
+    )
+
+    invoices = conn.execute(
+        text("""
+            SELECT id, source_hash, ma_so_thue_ban, so_hoa_don, ngay_lap,
+                   tong_thanh_toan, created_at
+            FROM invoices
+            ORDER BY created_at, id
+        """)
+    ).mappings().fetchall()
+    invoices = [dict(invoice) for invoice in invoices]
+
+    invoice_ids_to_delete: set[int] = set()
+    canonical_invoice_ids: set[int] = set()
+    duplicate_invoice_to_canonical_id: dict[int, int] = {}
+    for group in find_duplicate_groups(invoices):
+        ordered_invoices = sorted(
+            group["invoices"],
+            key=lambda invoice: (invoice.get("created_at"), invoice["id"]),
+        )
+        retained_invoices = []
+        for invoice in ordered_invoices:
+            invoice_date = _normalize_date(invoice.get("ngay_lap"))
+            invoice_amount = _normalize_amount(invoice.get("tong_thanh_toan"))
+            matching_invoice = next(
+                (
+                    retained
+                    for retained in retained_invoices
+                    if invoice_date
+                    and invoice_date == _normalize_date(retained.get("ngay_lap"))
+                    and invoice_amount is not None
+                    and (retained_amount := _normalize_amount(
+                        retained.get("tong_thanh_toan")
+                    )) is not None
+                    and abs(invoice_amount - retained_amount) <= AMOUNT_TOLERANCE
+                ),
+                None,
+            )
+            if matching_invoice is None:
+                retained_invoices.append(invoice)
+                continue
+            canonical_invoice_id = matching_invoice["id"]
+            canonical_invoice_ids.add(canonical_invoice_id)
+            invoice_ids_to_delete.add(invoice["id"])
+            duplicate_invoice_to_canonical_id[invoice["id"]] = canonical_invoice_id
+
+    jobs = conn.execute(
+        text("""
+            SELECT id, status, invoice_id, source_hash, created_at
+            FROM processing_jobs
+            WHERE status IN ('success', 'failed', 'duplicate')
+        """)
+    ).mappings().fetchall()
+    invoice_by_id = {invoice["id"]: invoice for invoice in invoices}
+    duplicate_hash_to_canonical_id = {}
+    for invoice_id in canonical_invoice_ids:
+        source_hash = invoice_by_id[invoice_id].get("source_hash")
+        if source_hash:
+            duplicate_hash_to_canonical_id[source_hash] = invoice_id
+    for invoice_id, canonical_invoice_id in duplicate_invoice_to_canonical_id.items():
+        source_hash = invoice_by_id[invoice_id].get("source_hash")
+        if source_hash:
+            duplicate_hash_to_canonical_id[source_hash] = canonical_invoice_id
+
+    job_ids_to_delete: set[int] = set()
+    canonical_success_job_preserved: set[int] = set()
+    for job in sorted(jobs, key=lambda item: (item.get("created_at"), item["id"])):
+        linked_invoice_id = job["invoice_id"]
+        if linked_invoice_id in invoice_ids_to_delete:
+            job_ids_to_delete.add(job["id"])
+            continue
+        canonical_invoice_id = linked_invoice_id
+        if canonical_invoice_id not in canonical_invoice_ids:
+            canonical_invoice_id = duplicate_hash_to_canonical_id.get(job["source_hash"])
+        if canonical_invoice_id not in canonical_invoice_ids:
+            continue
+        if (
+            job["status"] == "success"
+            and canonical_invoice_id not in canonical_success_job_preserved
+        ):
+            canonical_success_job_preserved.add(canonical_invoice_id)
+        else:
+            job_ids_to_delete.add(job["id"])
+
+    return invoice_ids_to_delete, job_ids_to_delete
+
+
+def get_duplicate_cleanup_preview() -> dict[str, int]:
+    engine = _make_engine()
+    _ensure_table(engine)
+    _ensure_jobs_table(engine)
+    with engine.begin() as conn:
+        invoice_ids, job_ids = _duplicate_cleanup_ids(conn)
+    return {"invoice_count": len(invoice_ids), "job_count": len(job_ids)}
+
+
+def cleanup_duplicate_invoices() -> dict[str, int]:
+    """Delete exact duplicate invoice data and its success/failed history jobs."""
+    engine = _make_engine()
+    _ensure_table(engine)
+    _ensure_jobs_table(engine)
+    with engine.begin() as conn:
+        invoice_ids, job_ids = _duplicate_cleanup_ids(conn)
+        for job_id in job_ids:
+            conn.execute(
+                text("DELETE FROM processing_jobs WHERE id = :id"),
+                {"id": job_id},
+            )
+        for invoice_id in invoice_ids:
+            conn.execute(
+                text("DELETE FROM invoices WHERE id = :id"),
+                {"id": invoice_id},
+            )
+    return {"invoice_count": len(invoice_ids), "job_count": len(job_ids)}
+
+
 def reset_job_to_processing(job_id: int) -> None:
     """Đặt lại 1 job về trạng thái 'processing', xóa lỗi cũ -- dùng khi thử lại."""
     engine = _make_engine()
@@ -419,7 +585,94 @@ def reset_job_to_processing(job_id: int) -> None:
             """),
             {"id": job_id},
         )
+def delete_selected_history_jobs(job_ids: list[int]) -> dict[str, int]:
+    from sqlalchemy import bindparam
 
+    selected_ids = sorted({int(job_id) for job_id in job_ids})
+    if not selected_ids:
+        return {"job_count": 0, "invoice_count": 0}
+
+    engine = _make_engine()
+    _ensure_table(engine)
+    _ensure_jobs_table(engine)
+
+    with engine.begin() as conn:
+        duplicate_invoice_ids, _ = _duplicate_cleanup_ids(conn)
+
+        selected_jobs = conn.execute(
+            text("""
+                SELECT id, status, invoice_id, source_hash
+                FROM processing_jobs
+                WHERE id IN :ids
+            """).bindparams(bindparam("ids", expanding=True)),
+            {"ids": selected_ids},
+        ).mappings().fetchall()
+
+        invoice_hashes = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT source_hash FROM invoices WHERE source_hash IS NOT NULL")
+            ).fetchall()
+        }
+
+        jobs_to_delete = set()
+        invoices_to_delete = set()
+
+        for job in selected_jobs:
+            invoice_id = job["invoice_id"]
+            is_failed_or_duplicate = job["status"] in {"failed", "duplicate"}
+            is_detected_duplicate = (
+                job["status"] == "success"
+                and (
+                    invoice_id in duplicate_invoice_ids
+                    or (
+                        invoice_id is None
+                        and job["source_hash"] in invoice_hashes
+                    )
+                )
+            )
+
+            if not (is_failed_or_duplicate or is_detected_duplicate):
+                continue
+
+            jobs_to_delete.add(job["id"])
+
+            if invoice_id in duplicate_invoice_ids:
+                invoices_to_delete.add(invoice_id)
+
+        if invoices_to_delete:
+            related_jobs = conn.execute(
+                text("""
+                    SELECT id
+                    FROM processing_jobs
+                    WHERE invoice_id IN :invoice_ids
+                """).bindparams(bindparam("invoice_ids", expanding=True)),
+                {"invoice_ids": sorted(invoices_to_delete)},
+            ).fetchall()
+            jobs_to_delete.update(row[0] for row in related_jobs)
+
+        if jobs_to_delete:
+            conn.execute(
+                text("""
+                    DELETE FROM processing_jobs
+                    WHERE id IN :ids
+                """).bindparams(bindparam("ids", expanding=True)),
+                {"ids": sorted(jobs_to_delete)},
+            )
+
+        if invoices_to_delete:
+            conn.execute(
+                text("""
+                    DELETE FROM invoices
+                    WHERE id IN :ids
+                """).bindparams(bindparam("ids", expanding=True)),
+                {"ids": sorted(invoices_to_delete)},
+            )
+
+    return {
+        "job_count": len(jobs_to_delete),
+        "invoice_count": len(invoices_to_delete),
+    }
 
 def get_job_by_id(job_id: int) -> dict | None:
     engine = _make_engine()
@@ -478,6 +731,8 @@ __all__ = [
     "get_confirmed_invoices", "update_invoice_data", "set_invoice_accounting_status",
     "set_invoice_payment_status",
     "create_job", "get_upload_duplicate_candidates", "cancel_failed_job",
-    "mark_job_success", "mark_job_failed",
+    "mark_job_success", "mark_job_duplicate", "mark_job_failed",
+    "get_duplicate_cleanup_preview", "cleanup_duplicate_invoices",
     "get_job_counts", "get_recent_jobs", "get_all_jobs", "get_friendly_error_reason",
+    "delete_selected_history_jobs",
 ]

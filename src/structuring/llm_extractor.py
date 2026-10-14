@@ -4,10 +4,18 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from google import genai
-from config import GEMINI_API_KEYS, GEMINI_MODEL_NAME, XAI_API_KEY, XAI_MODEL_NAME
+from config import (
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_MODEL_NAME,
+    GEMINI_API_KEYS,
+    GEMINI_MODEL_NAME,
+    XAI_API_KEY,
+    XAI_MODEL_NAME,
+)
 from src.structuring.schemas import Invoice
 
 XAI_API_URL = "https://api.x.ai/v1/chat/completions"
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 PROMPT_TEMPLATE = """
 Từ đoạn text OCR sau (trích từ hóa đơn GTGT tiếng Việt), hãy trích xuất
@@ -39,7 +47,7 @@ Text OCR:
 def _clean_json_string(raw_text: str) -> str:
     match = re.search(r"\{.*\}", raw_text, re.DOTALL)
     if not match:
-        raise ValueError("Không tìm thấy JSON hợp lệ trong phản hồi của Gemini")
+        raise ValueError("Không tìm thấy JSON hợp lệ trong phản hồi của nhà cung cấp AI")
     return match.group(0)
 
 
@@ -81,6 +89,44 @@ def _generate_xai_content(prompt: str) -> str:
     return content
 
 
+def _generate_deepseek_content(prompt: str) -> str:
+    if not DEEPSEEK_API_KEY:
+        raise RuntimeError("Chưa cấu hình DEEPSEEK hoặc DEEPSEEK_API_KEY trong file .env.")
+
+    request_body = json.dumps({
+        "model": DEEPSEEK_MODEL_NAME,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": 4096,
+    }).encode("utf-8")
+    request = Request(
+        DEEPSEEK_API_URL,
+        data=request_body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=90) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"DeepSeek API trả về HTTP {error.code}: {detail}") from error
+    except URLError as error:
+        raise RuntimeError(f"Không thể kết nối tới DeepSeek API: {error.reason}") from error
+
+    try:
+        content = payload["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as error:
+        raise ValueError("Phản hồi từ DeepSeek API không có nội dung hợp lệ.") from error
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("DeepSeek API trả về nội dung rỗng.")
+    return content
+
+
 def _generate_content(prompt: str) -> str:
     gemini_error = None
     for api_key in GEMINI_API_KEYS:
@@ -99,14 +145,22 @@ def _generate_content(prompt: str) -> str:
     try:
         return _generate_xai_content(prompt)
     except Exception as xai_error:
-        if gemini_error is None:
+        try:
+            return _generate_deepseek_content(prompt)
+        except Exception as deepseek_error:
+            errors = (
+                f"Lỗi Gemini: {gemini_error}. "
+                f"Lỗi xAI: {xai_error}. "
+                f"Lỗi DeepSeek: {deepseek_error}"
+            )
+            if gemini_error is None:
+                raise RuntimeError(
+                    f"Không gọi được xAI hoặc DeepSeek API. {errors}"
+                ) from deepseek_error
             raise RuntimeError(
-                f"Không gọi được xAI API: {xai_error}"
-            ) from xai_error
-        raise RuntimeError(
-            "Gemini không khả dụng và xAI dự phòng cũng thất bại. "
-            f"Lỗi Gemini: {gemini_error}. Lỗi xAI: {xai_error}"
-        ) from xai_error
+                "Gemini không khả dụng; xAI và DeepSeek dự phòng cũng thất bại. "
+                f"{errors}"
+            ) from deepseek_error
 
 
 def extract_invoice_data(ocr_text: str) -> Invoice:

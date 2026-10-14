@@ -12,7 +12,7 @@ from src.preprocessing.pdf_converter import pdf_to_images
 from src.pipeline import process_invoice_with_job_tracking
 from src.storage.db_handler import (
     get_recent_jobs, get_job_counts, get_confirmed_invoices, create_job,
-    get_upload_duplicate_candidates, mark_job_failed,
+    get_upload_duplicate_candidates, mark_job_duplicate, mark_job_failed,
 )
 
 st.set_page_config(page_title="InvoiceAI", page_icon="📄", layout="wide")
@@ -97,6 +97,28 @@ for uploaded_file in uploaded_files or []:
             duplicate_matches.append(candidate)
 
     if duplicate_matches:
+        resolved_duplicate = next(
+            (
+                match for match in duplicate_matches
+                if match.get("invoice_id") is not None
+            ),
+            None,
+        )
+        if resolved_duplicate:
+            job_id = create_job(
+                uploaded_file.name,
+                source_image=resolved_duplicate.get("source_image"),
+                source_hash=source_hash,
+            )
+            mark_job_duplicate(job_id, resolved_duplicate["invoice_id"])
+            st.session_state["session_job_ids"][upload_key] = job_id
+            st.session_state["duplicate_upload_decisions"].pop(upload_key, None)
+            st.info(
+                f"Đã nhận diện **{uploaded_file.name}** trùng nội dung với hóa đơn đã trích xuất. "
+                f"Không chạy OCR; lịch sử liên kết dữ liệu hóa đơn #{resolved_duplicate['invoice_id']}."
+            )
+            continue
+
         match_labels = ", ".join(
             f"job #{match['job_id']} ({match.get('status')})"
             for match in duplicate_matches
@@ -259,6 +281,8 @@ else:
             status_badge = (
                 '<div class="status-badge status-done">🟢 Hoàn tất</div>'
                 if job["status"] == "success"
+                else '<div class="status-badge status-duplicate">🔁 Trùng hóa đơn</div>'
+                if job["status"] == "duplicate"
                 else '<div class="status-badge status-pending">🟡 Đang xử lý</div>'
             )
             st.markdown(f"""

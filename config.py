@@ -56,6 +56,10 @@ GEMINI_MODEL_NAME = "gemini-3.6-flash"
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 XAI_MODEL_NAME = os.getenv("XAI_MODEL_NAME", "grok-4.7")
 
+# --- DeepSeek fallback ---
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK")
+DEEPSEEK_MODEL_NAME = os.getenv("DEEPSEEK_MODEL_NAME", "deepseek-chat")
+
 # --- Cấu hình OCR ---
 OCR_LANG = "vi"
 USE_GPU = False  # Đặt True nếu máy có GPU hỗ trợ CUDA

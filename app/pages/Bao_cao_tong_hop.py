@@ -312,8 +312,18 @@ with col_activity:
             if j["created_at"].date() == now.date()
         ]
 
-        STATUS_DOT = {"success": "#16A34A", "processing": "#D97706", "failed": "#DC2626"}
-        STATUS_TEXT = {"success": "Hoàn tất", "processing": "Đang xử lý", "failed": "Lỗi"}
+        STATUS_DOT = {
+            "success": "#16A34A",
+            "duplicate": "#7C3AED",
+            "processing": "#D97706",
+            "failed": "#DC2626",
+        }
+        STATUS_TEXT = {
+            "success": "Hoàn tất",
+            "duplicate": "Trùng hóa đơn",
+            "processing": "Đang xử lý",
+            "failed": "Lỗi",
+        }
 
         if not today_jobs:
             st.info("Chưa có hoạt động nào hôm nay.")

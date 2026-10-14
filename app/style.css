@@ -90,6 +90,7 @@ div[data-testid="stMetricValue"] {
     font-weight: 600;
 }
 .status-done { background-color: #DCFCE7; color: #15803D; }
+.status-duplicate { background-color: #EDE9FE; color: #6D28D9; }
 .status-pending { background-color: #FEF3C7; color: #B45309; }
 .status-failed { background-color: #FEE2E2; color: #B91C1C; }
 

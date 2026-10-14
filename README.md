@@ -29,16 +29,21 @@ GEMINI_API_KEY=your_key_here
 XAI_API_KEY=your_xai_key_here
 # Tùy chọn; mặc định là grok-4.7
 XAI_MODEL_NAME=grok-4.7
+# Tùy chọn dự phòng sau xAI; có thể dùng tên biến DEEPSEEK_API_KEY thay cho DEEPSEEK
+DEEPSEEK=your_deepseek_key_here
+# Tùy chọn; mặc định là deepseek-chat
+DEEPSEEK_MODEL_NAME=deepseek-chat
 ```
 
-Gemini được ưu tiên. xAI chỉ được gọi dự phòng sau khi các API key Gemini đều thất bại.
+Gemini được ưu tiên. xAI chỉ được gọi dự phòng sau khi các API key Gemini đều thất bại; DeepSeek được gọi cuối cùng nếu xAI cũng thất bại.
 
 ### Kiểm tra cảnh báo hóa đơn trùng
 
 1. Tải lên và xử lý thành công một hóa đơn.
-2. Tải lại đúng tệp đó (có thể đổi tên tệp). Hệ thống cảnh báo dựa trên SHA-256 trước khi chạy OCR và yêu cầu chọn **Tiếp tục xử lý** hoặc **Bỏ qua hóa đơn này**.
+2. Tải lại đúng tệp đó (có thể đổi tên tệp). Nếu đã có dữ liệu trích xuất gắn với SHA-256 đó, hệ thống liên kết job mới với hóa đơn cũ, ghi trạng thái **Trùng hóa đơn** và không chạy OCR lần nữa. Nếu chưa có dữ liệu cũ để liên kết, hệ thống yêu cầu chọn **Tiếp tục xử lý** hoặc **Bỏ qua hóa đơn này**.
 3. Nếu đổi tên và nội dung hóa đơn giống nhau nhưng tệp được scan/nén lại, cảnh báo sẽ dựa trên số hóa đơn, MST bên bán, ngày lập và tổng thanh toán sau khi AI trích xuất.
 4. Xem các nhóm nghi trùng ở trang **Báo cáo tổng hợp**. Với dữ liệu đã có trước khi bổ sung SHA-256, cần tải lại tệp cũ hoặc nhập số hóa đơn để hệ thống đối chiếu được.
+5. Trong **Lịch sử hóa đơn**, thao tác **Xóa hóa đơn trùng** sẽ chỉ xóa bản trích xuất khớp cùng MST bên bán, số hóa đơn, ngày lập và tổng thanh toán (sai số tối đa 1 đồng), cùng các job thành công/lỗi tương ứng. Bản gốc xử lý sớm nhất được giữ lại; các trường hợp cùng số hóa đơn nhưng khác ngày hoặc số tiền không bị xóa. Cần xác nhận trước khi xóa.
 
 ## Cách chạy
 
@@ -63,7 +68,7 @@ Xem chi tiết trong `docs/architecture_diagram.png`
 
 ## Công nghệ sử dụng
 - **OCR**: PaddleOCR (detection), VietOCR (recognition)
-- **Structuring**: Gemini API + Pydantic
+- **Structuring**: Gemini, xAI và DeepSeek API + Pydantic
 - **UI**: Streamlit
 - **Lưu trữ**: Excel (openpyxl) / SQLite (SQLAlchemy)
 
