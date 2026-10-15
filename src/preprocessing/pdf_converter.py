@@ -6,8 +6,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]  # lùi 2 cấp: preprocessin
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from pdf2image import convert_from_path
-from config import RAW_DIR  # giờ chắc chắn lấy đúng file config.py của bạn, không lấy nhầm package pip
+import fitz  # PyMuPDF: PDF rendering without a system Poppler installation.
+from config import RAW_DIR
+
+
 def pdf_to_images(pdf_path: Path, output_dir: Path = RAW_DIR):
     pdf_path = Path(pdf_path)
     output_dir = Path(output_dir)
@@ -15,14 +17,26 @@ def pdf_to_images(pdf_path: Path, output_dir: Path = RAW_DIR):
     if not pdf_path.exists():
         raise FileNotFoundError(f"Không tồn tại: {pdf_path.resolve()}")
 
-    pages = convert_from_path(str(pdf_path), dpi=200)  # giảm từ 300 xuống 200
     pdf_name = pdf_path.stem
-
     saved_paths = []
-    for i, page in enumerate(pages):
-        img_path = output_dir / f"{pdf_name}_page{i+1}.jpg"
-        page.save(img_path, "JPEG")
-        saved_paths.append(str(img_path))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # pdf2image requires Poppler (pdfinfo/pdftoppm) to be installed separately
+    # on every machine running the web app. PyMuPDF is already a Python
+    # dependency, so render locally without relying on a host-specific PATH.
+    with fitz.open(pdf_path) as document:
+        if document.needs_pass:
+            raise ValueError("PDF được bảo vệ bằng mật khẩu, không thể đọc.")
+        if document.page_count == 0:
+            raise ValueError("PDF không có trang nào để xử lý.")
+
+        scale = 200 / 72  # preserve the previous 200 DPI output resolution
+        matrix = fitz.Matrix(scale, scale)
+        for i, page in enumerate(document):
+            img_path = output_dir / f"{pdf_name}_page{i + 1}.jpg"
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            pixmap.save(str(img_path), jpg_quality=90)
+            saved_paths.append(str(img_path))
 
     return saved_paths
 
