@@ -32,7 +32,17 @@ def fmt_money(value):
 
 def is_stuck(created_at, minutes: int = 2) -> bool:
     """Coi 1 job 'processing' là bị kẹt/gián đoạn nếu đã tạo quá N phút mà chưa xong."""
-    return datetime.now() - created_at > timedelta(minutes=minutes)
+    if isinstance(created_at, str):
+        try:
+            created_at = datetime.fromisoformat(created_at.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    if not isinstance(created_at, datetime):
+        return False
+
+    # SQL databases may return either naive or timezone-aware datetimes.
+    now = datetime.now(created_at.tzinfo) if created_at.tzinfo else datetime.now()
+    return now - created_at > timedelta(minutes=minutes)
 
 
 css_path = Path(__file__).parent / "style.css"
