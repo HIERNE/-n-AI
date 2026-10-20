@@ -296,7 +296,12 @@ def get_upload_duplicate_candidates(source_hash: str, file_name: str) -> list[di
                           AND i2.source_hash = j.source_hash
                     )
                 )
-                WHERE j.source_hash = :source_hash OR j.file_name = :file_name
+                WHERE (j.source_hash = :source_hash OR j.file_name = :file_name)
+                  AND (
+                      j.status IN ('success', 'duplicate')
+                      OR j.invoice_id IS NOT NULL
+                      OR i.id IS NOT NULL
+                  )
                 ORDER BY j.created_at DESC
             """),
             {"source_hash": source_hash, "file_name": file_name},
@@ -399,6 +404,28 @@ def get_recent_jobs(limit: int = 5) -> list[dict]:
             """),
             {"limit": limit},
         ).mappings().fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_jobs_by_ids(job_ids: list[int]) -> list[dict]:
+    """Fetch only jobs created in the caller's current Streamlit session."""
+    normalized_ids = sorted({int(job_id) for job_id in job_ids if job_id is not None})
+    if not normalized_ids:
+        return []
+
+    from sqlalchemy import bindparam
+
+    engine = _make_engine()
+    _ensure_jobs_table(engine)
+    query = text("""
+        SELECT id, file_name, source_image, status, error_message,
+               error_reason, invoice_id, source_hash, created_at
+        FROM processing_jobs
+        WHERE id IN :ids
+        ORDER BY created_at DESC
+    """).bindparams(bindparam("ids", expanding=True))
+    with engine.begin() as conn:
+        rows = conn.execute(query, {"ids": normalized_ids}).mappings().fetchall()
     return [dict(row) for row in rows]
 
 
@@ -733,6 +760,7 @@ __all__ = [
     "create_job", "get_upload_duplicate_candidates", "cancel_failed_job",
     "mark_job_success", "mark_job_duplicate", "mark_job_failed",
     "get_duplicate_cleanup_preview", "cleanup_duplicate_invoices",
-    "get_job_counts", "get_recent_jobs", "get_all_jobs", "get_friendly_error_reason",
+    "get_job_counts", "get_recent_jobs", "get_jobs_by_ids", "get_all_jobs",
+    "get_friendly_error_reason",
     "delete_selected_history_jobs",
 ]

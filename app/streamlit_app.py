@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.preprocessing.pdf_converter import pdf_to_images
 from src.pipeline import process_invoice_with_job_tracking
 from src.storage.db_handler import (
-    get_recent_jobs, get_job_counts, get_confirmed_invoices, create_job,
+    get_jobs_by_ids, get_job_counts, get_confirmed_invoices, create_job,
     get_upload_duplicate_candidates, mark_job_duplicate, mark_job_failed,
 )
 
@@ -240,7 +240,7 @@ if st.session_state["session_job_ids"]:
 st.write("")
 st.markdown("##### 📋 Hóa đơn gần đây")
 
-recent_jobs = get_recent_jobs(limit=15)
+recent_jobs = get_jobs_by_ids(list(st.session_state["session_job_ids"].values()))
 unique_recent_jobs = []
 seen_file_names = set()
 for job in recent_jobs:
@@ -252,7 +252,7 @@ for job in recent_jobs:
 recent_jobs = unique_recent_jobs
 
 if not recent_jobs:
-    st.info("Chưa có hóa đơn nào được xử lý.")
+    st.info("Phiên này chưa xử lý hóa đơn nào.")
 else:
     for job in recent_jobs:
         needs_retry = job["status"] in {"failed", "processing"}
@@ -281,12 +281,16 @@ else:
                     if not source_path or not source_path.exists():
                         st.error("Không tìm thấy file gốc, vui lòng tải lên lại.")
                     else:
-                        with st.spinner("Đang xử lý lại..."):
-                            image_path = prepare_image_path(source_path)
-                            process_invoice_with_job_tracking(
-                                str(image_path), file_name=job["file_name"], job_id=job["id"]
-                            )
-                        st.rerun()
+                        try:
+                            with st.spinner("Đang xử lý lại..."):
+                                image_path = prepare_image_path(source_path)
+                                process_invoice_with_job_tracking(
+                                    str(image_path), file_name=job["file_name"], job_id=job["id"]
+                                )
+                            st.rerun()
+                        except Exception as e:
+                            mark_job_failed(job["id"], error_message=str(e))
+                            st.error("Thử xử lý lại chưa thành công. Chi tiết đã được lưu trong lịch sử.")
         else:
             status_badge = (
                 '<div class="status-badge status-done">🟢 Hoàn tất</div>'
