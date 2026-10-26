@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) in sys.path:
     sys.path.remove(str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import config
+import invoice_parser_config as config
 
 DATABASE_IS_SQLITE = config.DATABASE_URL.startswith("sqlite:")
 LLM_API_CONFIGURED = bool(

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
 
-from config import DATABASE_URL, DB_PATH
+from invoice_parser_config import DATABASE_URL, DB_PATH
 from src.storage.db_handler import (
     _ensure_auth_table,
     _ensure_jobs_table,
@@ -324,7 +324,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.users_only:
-        from config import ADMIN_USERNAME
+        from invoice_parser_config import ADMIN_USERNAME
 
         result = migrate_users(
             args.source,

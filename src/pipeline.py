@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import RAW_DIR
+from invoice_parser_config import RAW_DIR
 from src.ocr.ocr_pipeline import run_ocr
 from src.structuring.llm_extractor import extract_invoice_data
 from src.structuring.duplicate_detection import find_duplicate_groups

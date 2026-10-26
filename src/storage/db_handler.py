@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
-from config import ADMIN_PASSWORD, ADMIN_USERNAME, DATABASE_URL
+from invoice_parser_config import ADMIN_PASSWORD, ADMIN_USERNAME, DATABASE_URL
 from src.structuring.schemas import Invoice
 
 _BOOTSTRAPPED_ADMINS: set[tuple[str, str, str]] = set()

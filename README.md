@@ -44,7 +44,7 @@ ADMIN_PASSWORD=replace_with_a_long_unique_password
 ```
 
 Gemini được ưu tiên. xAI chỉ được gọi dự phòng sau khi các API key Gemini đều thất bại; DeepSeek được gọi cuối cùng nếu xAI cũng thất bại.
-Các dòng `MYSQL_*` ở trên là ví dụ để chép vào `.env`; khai báo mặc định trong `config.py` không tự kết nối MySQL. Cần đặt `MYSQL_HOST` và mật khẩu thực tế trong `.env` để bật kết nối MySQL local.
+Các dòng `MYSQL_*` ở trên là ví dụ để chép vào `.env`; khai báo mặc định trong `invoice_parser_config.py` không tự kết nối MySQL. Cần đặt `MYSQL_HOST` và mật khẩu thực tế trong `.env` để bật kết nối MySQL local.
 
 ### Tài khoản và phân quyền
 

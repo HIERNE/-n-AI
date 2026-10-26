@@ -4,7 +4,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from google import genai
-from config import (
+from invoice_parser_config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_MODEL_NAME,
     GEMINI_API_KEYS,
