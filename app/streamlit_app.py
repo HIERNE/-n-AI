@@ -7,16 +7,17 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) in sys.path:
+    sys.path.remove(str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT))
+
 import config
 
 DATABASE_IS_SQLITE = config.DATABASE_URL.startswith("sqlite:")
 LLM_API_CONFIGURED = bool(
     config.GEMINI_API_KEYS or config.XAI_API_KEY or config.DEEPSEEK_API_KEY
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.preprocessing.pdf_converter import pdf_to_images
 from src.pipeline import process_invoice_with_job_tracking
