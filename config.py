@@ -1,6 +1,7 @@
 import os
 import re
 from pathlib import Path
+from sqlalchemy.engine import URL
 from dotenv import find_dotenv, load_dotenv
 from dotenv.main import DotEnv
 
@@ -20,8 +21,11 @@ def _read_streamlit_secrets() -> dict:
     try:
         import streamlit as st
 
+        secret_files = st.config.get_option("secrets.files")
+        if not any(Path(path).is_file() for path in secret_files):
+            return {}
         return dict(st.secrets)
-    except Exception:
+    except FileNotFoundError:
         return {}
 
 
@@ -52,11 +56,6 @@ for d in [RAW_DIR, PROCESSED_DIR, GROUND_TRUTH_DIR, OUTPUT_DIR]:
 
 # --- API Key ---
 GEMINI_API_KEY = _setting("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError(
-        "Missing GEMINI_API_KEY. Add it to the local .env file or to "
-        "Secrets in your Streamlit Cloud app settings."
-    )
 
 _numbered_api_keys = sorted(
     (
@@ -84,6 +83,11 @@ XAI_MODEL_NAME = _setting("XAI_MODEL_NAME", "grok-4.7")
 # --- DeepSeek fallback ---
 DEEPSEEK_API_KEY = _setting("DEEPSEEK_API_KEY") or _setting("DEEPSEEK")
 DEEPSEEK_MODEL_NAME = _setting("DEEPSEEK_MODEL_NAME", "deepseek-chat")
+LLM_API_CONFIGURED = bool(GEMINI_API_KEYS or XAI_API_KEY or DEEPSEEK_API_KEY)
+
+# --- Account bootstrap ---
+ADMIN_USERNAME = _setting("ADMIN_USERNAME")
+ADMIN_PASSWORD = _setting("ADMIN_PASSWORD")
 
 # --- Cấu hình OCR ---
 OCR_LANG = "vi"
@@ -92,22 +96,34 @@ USE_GPU = False  # Đặt True nếu máy có GPU hỗ trợ CUDA
 # --- Cấu hình database ---
 DB_PATH = OUTPUT_DIR / "invoices.db"
 
+# MYSQL_HOST = _setting("MYSQL_HOST")
+# MYSQL_PORT = int(_setting("MYSQL_PORT", "3306"))
+# MYSQL_USER = _setting("MYSQL_USER", "root")
+# MYSQL_PASSWORD = _setting("MYSQL_PASSWORD", "")
+# MYSQL_DATABASE = _setting("MYSQL_DATABASE", "invoice_parser")
+
 MYSQL_HOST = _setting("MYSQL_HOST")
-MYSQL_PORT = _setting("MYSQL_PORT", "3306")
+MYSQL_PORT = int(_setting("MYSQL_PORT", "4000"))
 MYSQL_USER = _setting("MYSQL_USER", "root")
 MYSQL_PASSWORD = _setting("MYSQL_PASSWORD", "")
-MYSQL_DATABASE = _setting("MYSQL_DATABASE", "invoice_parser")
+MYSQL_DATABASE = _setting("MYSQL_DATABASE", "invoice_parser_host")
 
 DATABASE_URL = _setting("DATABASE_URL")
 if not DATABASE_URL:
     if MYSQL_HOST:
-        DATABASE_URL = (
-            f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}"
-            f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
-        )
+        DATABASE_URL = URL.create(
+            "mysql+pymysql",
+            username=MYSQL_USER,
+            password=MYSQL_PASSWORD,
+            host=MYSQL_HOST,
+            port=MYSQL_PORT,
+            database=MYSQL_DATABASE,
+        ).render_as_string(hide_password=False)
     else:
-        # A local SQLite database is suitable for a temporary public demo.
+        # SQLite is convenient locally but is ephemeral on Streamlit Cloud.
         DATABASE_URL = f"sqlite:///{DB_PATH.as_posix()}"
+
+DATABASE_IS_SQLITE = DATABASE_URL.startswith("sqlite:")
 
 # --- Cấu hình đánh giá ---
 EVAL_SAMPLE_SIZE = 15  # Số lượng hóa đơn dùng để đánh giá độ chính xác

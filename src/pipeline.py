@@ -31,10 +31,10 @@ def extract_invoice(image_path: str):
     return invoice
 
 
-def process_invoice(image_path: str):
+def process_invoice(image_path: str, user_id: int | None = None):
     """Pipeline cơ bản: ảnh -> OCR -> text -> LLM -> Invoice -> lưu MySQL. Không theo dõi job."""
     invoice = extract_invoice(image_path)
-    record_id = save_invoice_to_db(invoice, source_image=image_path)
+    record_id = save_invoice_to_db(invoice, source_image=image_path, user_id=user_id)
     return record_id
 
 
@@ -43,6 +43,7 @@ def process_invoice_with_job_tracking(
     file_name: str = None,
     job_id: int = None,
     source_hash: str = None,
+    user_id: int | None = None,
 ):
     """
     Giống process_invoice() nhưng ghi lại trạng thái job bền vững vào DB
@@ -55,18 +56,24 @@ def process_invoice_with_job_tracking(
     file_name = file_name or Path(image_path).name
 
     if job_id is None:
-        job_id = create_job(file_name, source_image=image_path, source_hash=source_hash)
+        job_id = create_job(
+            file_name, source_image=image_path, source_hash=source_hash, user_id=user_id
+        )
     else:
-        existing_job = get_job_by_id(job_id)
+        existing_job = get_job_by_id(
+            job_id, user_id=user_id, is_admin=user_id is None
+        )
+        if existing_job is None:
+            raise ValueError(f"Không tìm thấy job #{job_id} hoặc bạn không có quyền truy cập.")
         if source_hash is None and existing_job:
             source_hash = existing_job.get("source_hash")
-        reset_job_to_processing(job_id)
+        reset_job_to_processing(job_id, user_id=user_id)
 
     try:
         invoice = extract_invoice(image_path)
         duplicate_candidate = invoice.model_dump()
         duplicate_groups = find_duplicate_groups([
-            *get_all_invoices(),
+            *get_all_invoices(user_id=user_id, is_admin=user_id is None),
             duplicate_candidate,
         ])
         duplicate_matches = next(
@@ -85,8 +92,9 @@ def process_invoice_with_job_tracking(
             invoice,
             source_image=image_path,
             source_hash=source_hash,
+            user_id=user_id,
         )
-        mark_job_success(job_id, invoice_id)
+        mark_job_success(job_id, invoice_id, user_id=user_id)
         return {
             "status": "success",
             "invoice": invoice,
@@ -94,7 +102,7 @@ def process_invoice_with_job_tracking(
             "duplicate_matches": duplicate_matches,
         }
     except Exception as e:
-        mark_job_failed(job_id, error_message=str(e))
+        mark_job_failed(job_id, error_message=str(e), user_id=user_id)
         return {"status": "failed", "error": str(e), "job_id": job_id}
 
 
@@ -110,7 +118,7 @@ def run_pipeline_on_folder(folder_path=RAW_DIR, extensions=(".jpg", ".jpeg", ".p
     for ext in extensions:
         image_paths.extend(glob.glob(str(folder_path / f"*{ext}")))
 
-    already_processed = get_processed_image_names()
+    already_processed = get_processed_image_names(is_admin=True)
     new_images = [p for p in image_paths if Path(p).name not in already_processed]
 
     print(f"Tổng số ảnh khớp định dạng: {len(image_paths)}")

@@ -1,20 +1,55 @@
 import json
+import hashlib
+import hmac
+import os
+import re
+import secrets
+from functools import lru_cache
 from typing import Any
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 
-from config import DATABASE_URL, DB_PATH
+from config import ADMIN_PASSWORD, ADMIN_USERNAME, DATABASE_URL
 from src.structuring.schemas import Invoice
 
+_BOOTSTRAPPED_ADMINS: set[tuple[str, str, str]] = set()
+_GMAIL_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@gmail\.com$", re.IGNORECASE)
 
+
+def _needs_tls(url) -> bool:
+    """MySQL trên cloud (TiDB, Aiven...) bắt buộc TLS; MySQL local thì không.
+    Có thể ép bằng biến môi trường MYSQL_SSL=true/false."""
+    flag = os.getenv("MYSQL_SSL", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return url.host not in {None, "", "localhost", "127.0.0.1", "::1"}
+
+
+@lru_cache(maxsize=1)
 def _make_engine():
-    try:
-        import pymysql  # noqa: F401
-        return create_engine(DATABASE_URL, pool_pre_ping=True)
-    except Exception:
-        sqlite_url = f"sqlite:///{DB_PATH}"
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        return create_engine(sqlite_url)
+    """Tạo engine MỘT LẦN rồi dùng lại (tránh bắt tay TLS lại ở mỗi truy vấn)."""
+    url = make_url(DATABASE_URL)
+    backend = url.get_backend_name()
+    options: dict[str, Any] = {"pool_pre_ping": True, "pool_recycle": 280}
+    if backend == "mysql" and _needs_tls(url):
+        import certifi
+
+        options["connect_args"] = {"ssl": {"ca": certifi.where()}}
+    elif backend == "sqlite":
+        options["connect_args"] = {"check_same_thread": False}
+    return create_engine(DATABASE_URL, **options)
+
+
+def describe_database() -> str:
+    """Chuỗi mô tả DB đang dùng (không chứa mật khẩu) để hiển thị/kiểm tra."""
+    url = make_url(DATABASE_URL)
+    if url.get_backend_name() == "sqlite":
+        return f"SQLite ({url.database})"
+    return f"{url.get_backend_name()} @ {url.host}:{url.port or ''}/{url.database}"
 
 
 def _id_column(engine) -> str:
@@ -24,7 +59,7 @@ def _id_column(engine) -> str:
     return "id INTEGER NOT NULL AUTO_INCREMENT, PRIMARY KEY (id)"
 
 
-def _ensure_table(engine) -> None:
+def _ensure_table(engine, bootstrap_admin: bool = True) -> None:
     id_column = _id_column(engine)
     with engine.begin() as conn:
         conn.execute(text(f"""
@@ -45,6 +80,7 @@ def _ensure_table(engine) -> None:
                 tong_thanh_toan DOUBLE,
                 accounting_status VARCHAR(20) NOT NULL DEFAULT 'pending',
                 payment_status VARCHAR(20) NOT NULL DEFAULT 'unpaid',
+                user_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
@@ -64,13 +100,21 @@ def _ensure_table(engine) -> None:
             conn.execute(text(
                 "ALTER TABLE invoices ADD COLUMN so_hoa_don VARCHAR(100)"
             ))
+        if "source_image" not in columns:
+            conn.execute(text(
+                "ALTER TABLE invoices ADD COLUMN source_image VARCHAR(500)"
+            ))
         if "source_hash" not in columns:
             conn.execute(text(
                 "ALTER TABLE invoices ADD COLUMN source_hash VARCHAR(64)"
             ))
+        if "user_id" not in columns:
+            conn.execute(text("ALTER TABLE invoices ADD COLUMN user_id INTEGER"))
+    _ensure_auth_table(engine, bootstrap_admin=bootstrap_admin)
 
 
-def _ensure_jobs_table(engine) -> None:
+def _ensure_jobs_table(engine, bootstrap_admin: bool = True) -> None:
+    _ensure_table(engine, bootstrap_admin=bootstrap_admin)
     id_column = _id_column(engine)
     with engine.begin() as conn:
         conn.execute(text(f"""
@@ -80,9 +124,8 @@ def _ensure_jobs_table(engine) -> None:
                 source_image VARCHAR(500),
                 source_hash VARCHAR(64),
                 status VARCHAR(20) DEFAULT 'processing',
-                error_message TEXT,
-                error_reason VARCHAR(255),
                 invoice_id INTEGER,
+                user_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -92,16 +135,232 @@ def _ensure_jobs_table(engine) -> None:
             conn.execute(text(
                 "ALTER TABLE processing_jobs ADD COLUMN source_hash VARCHAR(64)"
             ))
+        if "user_id" not in columns:
+            conn.execute(text("ALTER TABLE processing_jobs ADD COLUMN user_id INTEGER"))
+        legacy_error_columns = columns.intersection({"error_message", "error_reason"})
+        if legacy_error_columns:
+            conn.execute(text(
+                "UPDATE processing_jobs SET "
+                + ", ".join(f"{column} = NULL" for column in sorted(legacy_error_columns))
+            ))
+    _ensure_auth_table(engine, bootstrap_admin=bootstrap_admin)
+    if "invoices" in inspect(engine).get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE processing_jobs
+                SET user_id = (
+                    SELECT invoices.user_id FROM invoices
+                    WHERE invoices.id = processing_jobs.invoice_id
+                )
+                WHERE user_id IS NULL AND invoice_id IS NOT NULL
+            """))
+
+
+def initialize_database() -> None:
+    """Create and migrate the application schema before serving requests."""
+    _ensure_jobs_table(_make_engine())
+
+
+def _password_hash(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 310_000)
+    return f"pbkdf2_sha256$310000${salt.hex()}${digest.hex()}"
+
+
+def _password_matches(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations, salt_hex, digest_hex = stored_hash.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations)
+        )
+        return hmac.compare_digest(digest.hex(), digest_hex)
+    except (TypeError, ValueError):
+        return False
+
+
+def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
+    id_column = _id_column(engine)
+    with engine.begin() as conn:
+        conn.execute(text(f"""
+            CREATE TABLE IF NOT EXISTS users (
+                {id_column},
+                username VARCHAR(64) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                full_name VARCHAR(255),
+                email VARCHAR(255),
+                role VARCHAR(20) NOT NULL DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        user_columns = {
+            column["name"] for column in inspect(engine).get_columns("users")
+        }
+        if "full_name" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(255)"))
+        if "email" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(255)"))
+
+    if not bootstrap_admin:
+        return
+    if bool(ADMIN_USERNAME) != bool(ADMIN_PASSWORD):
+        raise RuntimeError(
+            "Cần cấu hình đồng thời ADMIN_USERNAME và ADMIN_PASSWORD để khởi tạo admin."
+        )
+    if not ADMIN_USERNAME:
+        return
+
+    username = ADMIN_USERNAME.strip()
+    if not username:
+        raise RuntimeError("ADMIN_USERNAME không được để trống.")
+    if len(ADMIN_PASSWORD) < 6:
+        raise RuntimeError("ADMIN_PASSWORD cần có ít nhất 6 ký tự.")
+    bootstrap_key = (
+        str(engine.url),
+        username,
+        hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).hexdigest(),
+    )
+    with engine.begin() as conn:
+        existing = conn.execute(
+            text("SELECT id FROM users WHERE username = :username"),
+            {"username": username},
+        ).first()
+        if existing:
+            admin_id = existing[0]
+            if bootstrap_key not in _BOOTSTRAPPED_ADMINS:
+                conn.execute(text("""
+                    UPDATE users SET password_hash = :password_hash, role = 'admin'
+                    WHERE id = :id
+                """), {
+                    "password_hash": _password_hash(ADMIN_PASSWORD),
+                    "id": admin_id,
+                })
+        else:
+            result = conn.execute(text("""
+                INSERT INTO users (username, password_hash, role)
+                VALUES (:username, :password_hash, 'admin')
+            """), {
+                "username": username,
+                "password_hash": _password_hash(ADMIN_PASSWORD),
+            })
+            admin_id = result.lastrowid
+
+        tables = set(inspect(engine).get_table_names())
+        for table in {"invoices", "processing_jobs"} & tables:
+            columns = {
+                column["name"] for column in inspect(engine).get_columns(table)
+            }
+            if "user_id" in columns:
+                conn.execute(text(
+                    f"UPDATE {table} SET user_id = :admin_id WHERE user_id IS NULL"
+                ), {"admin_id": admin_id})
+    _BOOTSTRAPPED_ADMINS.add(bootstrap_key)
+
+
+def register_user(
+    username: str,
+    password: str,
+    full_name: str | None = None,
+    email: str | None = None,
+) -> dict[str, Any]:
+    email_value = email
+    email = (email or "").strip().casefold()
+    full_name = (full_name or "").strip() or None
+    if email_value is not None:
+        if not _GMAIL_EMAIL_RE.fullmatch(email):
+            raise ValueError("Vui lòng nhập email Gmail hợp lệ (ví dụ: ten@gmail.com).")
+        username = email
+    else:
+        username = (username or "").strip()
+        if len(username) < 3 or len(username) > 64:
+            raise ValueError("Tên đăng nhập cần có từ 3 đến 64 ký tự.")
+        if not all(character.isalnum() or character in "._-" for character in username):
+            raise ValueError("Tên đăng nhập chỉ được chứa chữ, số, dấu chấm, gạch dưới hoặc gạch ngang.")
+        username = username.casefold()
+    if len(password or "") < 6:
+        raise ValueError("Mật khẩu cần có ít nhất 6 ký tự.")
+
+    engine = _make_engine()
+    _ensure_auth_table(engine)
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(text("""
+                INSERT INTO users (username, password_hash, full_name, email, role)
+                VALUES (:username, :password_hash, :full_name, :email, 'user')
+            """), {
+                "username": username,
+                "password_hash": _password_hash(password),
+                "full_name": full_name,
+                "email": email or None,
+            })
+            user_id = int(result.lastrowid)
+    except IntegrityError as exc:
+        raise ValueError("Tên đăng nhập đã được sử dụng.") from exc
+    from src.logging_config import log_activity
+
+    log_activity("user_registered", user_id=user_id)
+    return {
+        "id": user_id,
+        "username": username,
+        "full_name": full_name,
+        "email": email or None,
+        "role": "user",
+    }
+
+
+def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
+    engine = _make_engine()
+    _ensure_auth_table(engine)
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("""
+                SELECT id, username, password_hash, role, full_name, email
+                FROM users
+                WHERE LOWER(username) = :username OR LOWER(email) = :username
+            """),
+            {"username": (username or "").strip().casefold()},
+        ).mappings().first()
+    if not row or not _password_matches(password or "", row["password_hash"]):
+        return None
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "full_name": row["full_name"],
+        "email": row["email"],
+        "role": row["role"],
+    }
+
+
+def get_auth_configuration() -> dict[str, bool]:
+    return {
+        "admin_configured": bool(
+            ADMIN_USERNAME and ADMIN_PASSWORD and len(ADMIN_PASSWORD) >= 6
+        )
+    }
 
 
 # ===================== INVOICES (dữ liệu đã xác nhận thành công) =====================
 
-def save_invoice_to_db(invoice: Invoice, source_image: str, source_hash: str = None) -> int:
+def _ownership_filter(user_id: int | None, is_admin: bool, table_alias: str = "") -> tuple[str, dict]:
+    if is_admin:
+        return "1 = 1", {}
+    if user_id is None:
+        return "1 = 0", {}
+    return f"{table_alias}user_id = :user_id", {"user_id": user_id}
+
+
+def save_invoice_to_db(
+    invoice: Invoice,
+    source_image: str,
+    source_hash: str = None,
+    user_id: int | None = None,
+) -> int:
     from pathlib import Path
     engine = _make_engine()
     _ensure_table(engine)
 
-    source_image_name = Path(source_image).name
+    source_image_name = Path(source_image).as_posix()
 
     payload = json.dumps(
         [item.model_dump() for item in invoice.danh_sach_mat_hang],
@@ -114,11 +373,11 @@ def save_invoice_to_db(invoice: Invoice, source_image: str, source_hash: str = N
                 INSERT INTO invoices (
                     source_image, source_hash, ma_so_thue_ban, ten_cong_ty_ban, so_hoa_don, ma_so_thue_mua,
                     ten_cong_ty_mua, ngay_lap, danh_sach_mat_hang, tong_tien_hang,
-                    thue_suat_vat, tien_thue_vat, tong_thanh_toan, accounting_status
+                    thue_suat_vat, tien_thue_vat, tong_thanh_toan, accounting_status, user_id
                 ) VALUES (
                     :source_image, :source_hash, :ma_so_thue_ban, :ten_cong_ty_ban, :so_hoa_don, :ma_so_thue_mua,
                     :ten_cong_ty_mua, :ngay_lap, :danh_sach_mat_hang, :tong_tien_hang,
-                    :thue_suat_vat, :tien_thue_vat, :tong_thanh_toan, 'pending'
+                    :thue_suat_vat, :tien_thue_vat, :tong_thanh_toan, 'pending', :user_id
                 )
             """),
             {
@@ -135,49 +394,135 @@ def save_invoice_to_db(invoice: Invoice, source_image: str, source_hash: str = N
                 "thue_suat_vat": invoice.thue_suat_vat,
                 "tien_thue_vat": invoice.tien_thue_vat,
                 "tong_thanh_toan": invoice.tong_thanh_toan,
+                "user_id": (
+                    user_id if user_id is not None else _configured_admin_user_id(conn)
+                ),
             },
         )
         return int(result.lastrowid)
 
 
-def get_processed_image_names() -> set:
+def _configured_admin_user_id(conn) -> int | None:
+    if not ADMIN_USERNAME:
+        return None
+    row = conn.execute(
+        text("SELECT id FROM users WHERE username = :username AND role = 'admin'"),
+        {"username": ADMIN_USERNAME.strip()},
+    ).first()
+    return int(row[0]) if row else None
+
+
+def get_processed_image_names(user_id: int | None = None, is_admin: bool = False) -> set:
     engine = _make_engine()
     _ensure_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin)
     with engine.begin() as conn:
-        rows = conn.execute(text("SELECT source_image FROM invoices")).fetchall()
+        rows = conn.execute(
+            text(f"SELECT source_image FROM invoices WHERE {ownership}"), params
+        ).fetchall()
     return {row[0] for row in rows if row[0] is not None}
 
 
-def _get_invoices(accounting_status: str = None) -> list[dict[str, Any]]:
+def _get_invoices(
+    accounting_status: str = None,
+    user_id: int | None = None,
+    is_admin: bool = False,
+) -> list[dict[str, Any]]:
     engine = _make_engine()
     _ensure_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin, "invoices.")
     with engine.begin() as conn:
         query = """
-            SELECT id, source_image, source_hash, ma_so_thue_ban, ten_cong_ty_ban,
-                   so_hoa_don, ma_so_thue_mua, ten_cong_ty_mua, ngay_lap,
-                   danh_sach_mat_hang, tong_tien_hang, thue_suat_vat,
-                   tien_thue_vat, tong_thanh_toan, accounting_status,
-                   payment_status, created_at
+            SELECT invoices.id, invoices.source_image, invoices.source_hash,
+                   invoices.ma_so_thue_ban, invoices.ten_cong_ty_ban,
+                   invoices.so_hoa_don, invoices.ma_so_thue_mua,
+                   invoices.ten_cong_ty_mua, invoices.ngay_lap,
+                   invoices.danh_sach_mat_hang, invoices.tong_tien_hang,
+                   invoices.thue_suat_vat, invoices.tien_thue_vat,
+                   invoices.tong_thanh_toan, invoices.accounting_status,
+                   invoices.payment_status, invoices.created_at, invoices.user_id,
+                   CASE
+                       WHEN invoices.created_at IS NULL
+                            OR invoices.created_at < uploader.created_at
+                           THEN NULL
+                       ELSE uploader.username
+                   END AS uploader_username,
+                   CASE
+                       WHEN invoices.created_at IS NULL
+                            OR invoices.created_at < uploader.created_at
+                           THEN NULL
+                       ELSE uploader.full_name
+                   END AS uploader_full_name
             FROM invoices
+            LEFT JOIN users AS uploader ON uploader.id = invoices.user_id
+            WHERE 
         """
-        params = {}
+        query += ownership
         if accounting_status is not None:
-            query += " WHERE accounting_status = :accounting_status"
+            query += " AND accounting_status = :accounting_status"
             params["accounting_status"] = accounting_status
-        query += " ORDER BY created_at DESC"
+        query += " ORDER BY invoices.created_at DESC"
         rows = conn.execute(text(query), params).mappings().fetchall()
     return [dict(row) for row in rows]
 
 
-def get_all_invoices() -> list[dict[str, Any]]:
-    return _get_invoices()
+def get_all_invoices(user_id: int | None = None, is_admin: bool = False) -> list[dict[str, Any]]:
+    return _get_invoices(user_id=user_id, is_admin=is_admin)
 
 
-def get_confirmed_invoices() -> list[dict[str, Any]]:
-    return _get_invoices("confirmed")
+def get_confirmed_invoices(user_id: int | None = None, is_admin: bool = False) -> list[dict[str, Any]]:
+    return _get_invoices("confirmed", user_id=user_id, is_admin=is_admin)
 
 
-def update_invoice_data(invoice_id: int, fields: dict[str, Any]) -> None:
+def get_invoice_count(user_id: int | None = None, is_admin: bool = False) -> int:
+    engine = _make_engine()
+    _ensure_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin)
+    with engine.begin() as conn:
+        return int(conn.execute(
+            text(f"SELECT COUNT(*) FROM invoices WHERE {ownership}"), params
+        ).scalar_one())
+
+
+def set_invoice_source_image(
+    invoice_id: int,
+    source_image: str,
+    user_id: int | None = None,
+    is_admin: bool = False,
+) -> None:
+    if not source_image or not source_image.strip():
+        raise ValueError("Đường dẫn ảnh hóa đơn không được để trống.")
+
+    engine = _make_engine()
+    _ensure_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin)
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                f"UPDATE invoices SET source_image = :source_image "
+                f"WHERE id = :id AND {ownership}"
+            ),
+            {"source_image": source_image, "id": invoice_id, **params},
+        )
+        if result.rowcount == 0:
+            raise ValueError(f"Không tìm thấy hóa đơn #{invoice_id} hoặc bạn không có quyền truy cập.")
+
+    from src.logging_config import log_activity
+
+    log_activity(
+        "invoice_source_linked",
+        user_id=user_id,
+        resource_type="invoice",
+        resource_id=invoice_id,
+    )
+
+
+def update_invoice_data(
+    invoice_id: int,
+    fields: dict[str, Any],
+    user_id: int | None = None,
+    is_admin: bool = False,
+) -> None:
     allowed_fields = {
         "ma_so_thue_ban", "ten_cong_ty_ban", "so_hoa_don", "ma_so_thue_mua",
         "ten_cong_ty_mua", "ngay_lap", "danh_sach_mat_hang",
@@ -191,18 +536,40 @@ def update_invoice_data(invoice_id: int, fields: dict[str, Any]) -> None:
         values["danh_sach_mat_hang"] = json.dumps(values["danh_sach_mat_hang"], ensure_ascii=False)
 
     assignments = ", ".join(f"{field} = :{field}" for field in values)
+    status_assignment = ", accounting_status = 'pending'" if is_admin else ""
     engine = _make_engine()
     _ensure_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin)
     with engine.begin() as conn:
         result = conn.execute(
-            text(f"UPDATE invoices SET {assignments}, accounting_status = 'pending' WHERE id = :id"),
-            {**values, "id": invoice_id},
+            text(
+                f"UPDATE invoices SET {assignments}{status_assignment} "
+                f"WHERE id = :id AND {ownership} "
+                "AND (:is_admin = 1 OR accounting_status = 'pending')"
+            ),
+            {**values, "id": invoice_id, "is_admin": int(is_admin), **params},
         )
         if result.rowcount == 0:
-            raise ValueError(f"Không tìm thấy hóa đơn #{invoice_id}.")
+            raise ValueError(f"Không tìm thấy hóa đơn #{invoice_id} hoặc bạn không có quyền truy cập.")
+
+    from src.logging_config import log_activity
+
+    log_activity(
+        "invoice_data_updated",
+        user_id=user_id,
+        resource_type="invoice",
+        resource_id=invoice_id,
+    )
 
 
-def set_invoice_accounting_status(invoice_id: int, accounting_status: str) -> None:
+def set_invoice_accounting_status(
+    invoice_id: int,
+    accounting_status: str,
+    is_admin: bool = False,
+    actor_user_id: int | None = None,
+) -> None:
+    if not is_admin:
+        raise PermissionError("Chỉ quản trị viên mới được đổi trạng thái duyệt hóa đơn.")
     if accounting_status not in {"pending", "confirmed", "rejected"}:
         raise ValueError("Trạng thái duyệt hóa đơn không hợp lệ.")
 
@@ -216,8 +583,25 @@ def set_invoice_accounting_status(invoice_id: int, accounting_status: str) -> No
         if result.rowcount == 0:
             raise ValueError(f"Không tìm thấy hóa đơn #{invoice_id}.")
 
+    from src.logging_config import log_activity
 
-def set_invoice_payment_status(invoice_id: int, payment_status: str) -> None:
+    log_activity(
+        "invoice_accounting_status_changed",
+        user_id=actor_user_id,
+        resource_type="invoice",
+        resource_id=invoice_id,
+        status=accounting_status,
+    )
+
+
+def set_invoice_payment_status(
+    invoice_id: int,
+    payment_status: str,
+    is_admin: bool = False,
+    actor_user_id: int | None = None,
+) -> None:
+    if not is_admin:
+        raise PermissionError("Chỉ quản trị viên mới được đổi trạng thái thanh toán.")
     if payment_status not in {"paid", "unpaid"}:
         raise ValueError("Trạng thái thanh toán không hợp lệ.")
 
@@ -231,8 +615,18 @@ def set_invoice_payment_status(invoice_id: int, payment_status: str) -> None:
         if result.rowcount == 0:
             raise ValueError(f"Không tìm thấy hóa đơn #{invoice_id}.")
 
+    from src.logging_config import log_activity
 
-# ===================== PROCESSING JOBS (nhật ký xử lý — bền vững toàn hệ thống) =====================
+    log_activity(
+        "invoice_payment_status_changed",
+        user_id=actor_user_id,
+        resource_type="invoice",
+        resource_id=invoice_id,
+        status=payment_status,
+    )
+
+
+# ===================== PROCESSING JOBS (trạng thái xử lý) =====================
 
 FRIENDLY_ERROR_RULES = [
     (("503", "unavailable", "overloaded", "high demand"),
@@ -257,7 +651,12 @@ def get_friendly_error_reason(error_message: str) -> str:
     return "Lỗi không xác định trong quá trình xử lý, xem chi tiết kỹ thuật bên dưới"
 
 
-def create_job(file_name: str, source_image: str = None, source_hash: str = None) -> int:
+def create_job(
+    file_name: str,
+    source_image: str = None,
+    source_hash: str = None,
+    user_id: int | None = None,
+) -> int:
     """Tạo 1 bản ghi job trạng thái 'processing' NGAY KHI bắt đầu xử lý."""
     engine = _make_engine()
     _ensure_jobs_table(engine)
@@ -273,16 +672,39 @@ def create_job(file_name: str, source_image: str = None, source_hash: str = None
                 "source_hash": source_hash,
             },
         )
-        return int(result.lastrowid)
+        resolved_user_id = (
+            user_id if user_id is not None else _configured_admin_user_id(conn)
+        )
+        if resolved_user_id is not None:
+            conn.execute(
+                text("UPDATE processing_jobs SET user_id = :user_id WHERE id = :id"),
+                {"user_id": resolved_user_id, "id": result.lastrowid},
+            )
+        job_id = int(result.lastrowid)
+    from src.logging_config import log_activity
+
+    log_activity(
+        "invoice_processing_started",
+        user_id=resolved_user_id,
+        resource_type="processing_job",
+        resource_id=job_id,
+    )
+    return job_id
 
 
-def get_upload_duplicate_candidates(source_hash: str, file_name: str) -> list[dict[str, Any]]:
+def get_upload_duplicate_candidates(
+    source_hash: str,
+    file_name: str,
+    user_id: int | None = None,
+    is_admin: bool = False,
+) -> list[dict[str, Any]]:
     engine = _make_engine()
     _ensure_table(engine)
     _ensure_jobs_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin, "j.")
     with engine.begin() as conn:
         rows = conn.execute(
-            text("""
+            text(f"""
                 SELECT j.id AS job_id, j.file_name, j.source_image, j.source_hash,
                        j.status, COALESCE(j.invoice_id, i.id) AS invoice_id,
                        i.so_hoa_don, i.ngay_lap, i.tong_thanh_toan
@@ -294,9 +716,11 @@ def get_upload_duplicate_candidates(source_hash: str, file_name: str) -> list[di
                         FROM invoices i2
                         WHERE j.source_hash IS NOT NULL
                           AND i2.source_hash = j.source_hash
+                          AND (i2.user_id = j.user_id OR :is_admin = 1)
                     )
-                )
+                ) AND (i.user_id = j.user_id OR :is_admin = 1)
                 WHERE (j.source_hash = :source_hash OR j.file_name = :file_name)
+                  AND {ownership}
                   AND (
                       j.status IN ('success', 'duplicate')
                       OR j.invoice_id IS NOT NULL
@@ -304,79 +728,103 @@ def get_upload_duplicate_candidates(source_hash: str, file_name: str) -> list[di
                   )
                 ORDER BY j.created_at DESC
             """),
-            {"source_hash": source_hash, "file_name": file_name},
+            {
+                "source_hash": source_hash,
+                "file_name": file_name,
+                "is_admin": int(is_admin),
+                **params,
+            },
         ).mappings().fetchall()
     return [dict(row) for row in rows]
 
 
-def mark_job_success(job_id: int, invoice_id: int) -> None:
+def mark_job_success(job_id: int, invoice_id: int, user_id: int | None = None) -> None:
     engine = _make_engine()
     with engine.begin() as conn:
-        conn.execute(
+        result = conn.execute(
             text("""
                 UPDATE processing_jobs
                 SET status = 'success', invoice_id = :invoice_id, updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
+                WHERE id = :id AND (:user_id IS NULL OR user_id = :user_id)
             """),
-            {"invoice_id": invoice_id, "id": job_id},
+            {"invoice_id": invoice_id, "id": job_id, "user_id": user_id},
+        )
+    if result.rowcount:
+        from src.logging_config import log_activity
+
+        log_activity(
+            "invoice_processing_completed",
+            user_id=user_id,
+            resource_type="invoice",
+            resource_id=invoice_id,
+            status="success",
         )
 
 
-def mark_job_duplicate(job_id: int, invoice_id: int) -> None:
+def mark_job_duplicate(job_id: int, invoice_id: int, user_id: int | None = None) -> None:
     engine = _make_engine()
     with engine.begin() as conn:
-        conn.execute(
+        result = conn.execute(
             text("""
                 UPDATE processing_jobs
                 SET status = 'duplicate', invoice_id = :invoice_id,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
+                WHERE id = :id AND (:user_id IS NULL OR user_id = :user_id)
             """),
-            {"invoice_id": invoice_id, "id": job_id},
+            {"invoice_id": invoice_id, "id": job_id, "user_id": user_id},
+        )
+    if result.rowcount:
+        from src.logging_config import log_activity
+
+        log_activity(
+            "invoice_upload_marked_duplicate",
+            user_id=user_id,
+            resource_type="invoice",
+            resource_id=invoice_id,
+            status="duplicate",
         )
 
 
-def mark_job_failed(job_id: int, error_message: str) -> None:
-    friendly = get_friendly_error_reason(error_message)
+def mark_job_failed(
+    job_id: int, error_message: str, user_id: int | None = None
+) -> None:
+    from src.logging_config import get_app_logger
+
+    get_app_logger().error("Invoice processing job %s failed: %s", job_id, error_message)
     engine = _make_engine()
     with engine.begin() as conn:
-        conn.execute(
+        result = conn.execute(
             text("""
                 UPDATE processing_jobs
-                SET status = 'failed', error_message = :msg, error_reason = :reason,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
+                SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND (:user_id IS NULL OR user_id = :user_id)
             """),
-            {"msg": error_message, "reason": friendly, "id": job_id},
+            {"id": job_id, "user_id": user_id},
+        )
+    if result.rowcount:
+        from src.logging_config import log_activity
+
+        log_activity(
+            "invoice_processing_failed",
+            user_id=user_id,
+            resource_type="processing_job",
+            resource_id=job_id,
+            status="failed",
         )
 
 
-# def cancel_failed_job(job_id: int) -> None:
-#     """Mark a failed job as cancelled without deleting its audit history or source file."""
-#     engine = _make_engine()
-#     _ensure_jobs_table(engine)
-#     with engine.begin() as conn:
-#         result = conn.execute(
-#             text("""
-#                 UPDATE processing_jobs
-#                 SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-#                 WHERE id = :id AND status = 'failed' AND invoice_id IS NULL
-#             """),
-#             {"id": job_id},
-#         )
-#         if result.rowcount == 0:
-#             raise ValueError(
-#                 f"Không thể hủy hóa đơn #{job_id}: chỉ hủy được job lỗi chưa tạo hóa đơn."
-#             )
-
-
-def get_job_counts() -> dict:
-    """Đếm số job theo từng trạng thái — dùng cho sidebar, bền vững toàn hệ thống."""
+def get_job_counts(user_id: int | None = None, is_admin: bool = False) -> dict:
+    """Đếm số job theo từng trạng thái trong phạm vi tài khoản."""
+    backfill_jobs_from_invoices()
     engine = _make_engine()
     _ensure_jobs_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin)
     with engine.begin() as conn:
         rows = conn.execute(
-            text("SELECT status, COUNT(*) FROM processing_jobs GROUP BY status")
+            text(
+                "SELECT status, COUNT(*) FROM processing_jobs "
+                f"WHERE {ownership} GROUP BY status"
+            ), params
         ).fetchall()
     counts = {
         "processing": 0,
@@ -390,25 +838,31 @@ def get_job_counts() -> dict:
     return counts
 
 
-def get_recent_jobs(limit: int = 5) -> list[dict]:
+def get_recent_jobs(
+    limit: int = 5, user_id: int | None = None, is_admin: bool = False
+) -> list[dict]:
     engine = _make_engine()
     _ensure_jobs_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin, "processing_jobs.")
     with engine.begin() as conn:
         rows = conn.execute(
             text("""
-                SELECT id, file_name, source_image, status, error_message,
-                       error_reason, invoice_id, source_hash, created_at
+                SELECT id, file_name, source_image, status,
+                       invoice_id, source_hash, created_at
                 FROM processing_jobs
+                WHERE {ownership}
                 ORDER BY created_at DESC
                 LIMIT :limit
-            """),
-            {"limit": limit},
+            """.format(ownership=ownership)),
+            {"limit": limit, **params},
         ).mappings().fetchall()
     return [dict(row) for row in rows]
 
 
-def get_jobs_by_ids(job_ids: list[int]) -> list[dict]:
-    """Fetch only jobs created in the caller's current Streamlit session."""
+def get_jobs_by_ids(
+    job_ids: list[int], user_id: int | None = None, is_admin: bool = False
+) -> list[dict]:
+    """Fetch requested jobs that belong to the signed-in account."""
     normalized_ids = sorted({int(job_id) for job_id in job_ids if job_id is not None})
     if not normalized_ids:
         return []
@@ -417,40 +871,47 @@ def get_jobs_by_ids(job_ids: list[int]) -> list[dict]:
 
     engine = _make_engine()
     _ensure_jobs_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin, "processing_jobs.")
     query = text("""
-        SELECT id, file_name, source_image, status, error_message,
-               error_reason, invoice_id, source_hash, created_at
+        SELECT id, file_name, source_image, status,
+               invoice_id, source_hash, created_at
         FROM processing_jobs
-        WHERE id IN :ids
+        WHERE id IN :ids AND {ownership}
         ORDER BY created_at DESC
-    """).bindparams(bindparam("ids", expanding=True))
+    """.format(ownership=ownership)).bindparams(bindparam("ids", expanding=True))
     with engine.begin() as conn:
-        rows = conn.execute(query, {"ids": normalized_ids}).mappings().fetchall()
+        rows = conn.execute(query, {"ids": normalized_ids, **params}).mappings().fetchall()
     return [dict(row) for row in rows]
 
 
-def get_all_jobs() -> list[dict]:
+def get_all_jobs(user_id: int | None = None, is_admin: bool = False) -> list[dict]:
     engine = _make_engine()
     _ensure_jobs_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin, "processing_jobs.")
     with engine.begin() as conn:
         rows = conn.execute(
             text("""
-                SELECT id, file_name, source_image, status, error_message,
-                       error_reason, invoice_id, source_hash, created_at
+                SELECT id, file_name, source_image, status,
+                       invoice_id, source_hash, created_at
                 FROM processing_jobs
+                WHERE {ownership}
                 ORDER BY created_at DESC
-            """)
+            """.format(ownership=ownership)), params
         ).mappings().fetchall()
     return [dict(row) for row in rows]
-def get_full_history() -> list[dict]:
+
+
+def get_full_history(user_id: int | None = None, is_admin: bool = False) -> list[dict]:
     """Kết hợp processing_jobs với invoices -> dùng cho trang Lịch sử hóa đơn,
     hiển thị đúng trạng thái thật (success/processing/failed), không gắn cứng."""
+    backfill_jobs_from_invoices()
     engine = _make_engine()
     _ensure_table(engine)
     _ensure_jobs_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin, "j.")
 
     with engine.begin() as conn:
-        rows = conn.execute(text("""
+        rows = conn.execute(text(f"""
             SELECT
                 j.id AS job_id, j.file_name, j.source_image, j.source_hash,
                 CASE
@@ -459,10 +920,21 @@ def get_full_history() -> list[dict]:
                         THEN 'duplicate'
                     ELSE j.status
                 END AS status,
-                j.error_reason, j.error_message, j.created_at,
+                j.created_at,
                 i.ma_so_thue_ban, i.ten_cong_ty_ban, i.so_hoa_don,
-                i.ngay_lap, i.tong_thanh_toan
+                i.ngay_lap, i.tong_thanh_toan,
+                CASE
+                    WHEN j.created_at IS NULL OR j.created_at < uploader.created_at
+                        THEN NULL
+                    ELSE uploader.username
+                END AS uploader_username,
+                CASE
+                    WHEN j.created_at IS NULL OR j.created_at < uploader.created_at
+                        THEN NULL
+                    ELSE uploader.full_name
+                END AS uploader_full_name
             FROM processing_jobs j
+            LEFT JOIN users AS uploader ON uploader.id = j.user_id
             LEFT JOIN invoices i ON i.id = COALESCE(
                 j.invoice_id,
                 (
@@ -470,10 +942,12 @@ def get_full_history() -> list[dict]:
                     FROM invoices i2
                     WHERE j.source_hash IS NOT NULL
                       AND i2.source_hash = j.source_hash
+                      AND (i2.user_id = j.user_id OR :is_admin = 1)
                 )
-            )
+            ) AND (i.user_id = j.user_id OR :is_admin = 1)
+            WHERE {ownership}
             ORDER BY j.created_at DESC
-        """)).mappings().fetchall()
+        """), {**params, "is_admin": int(is_admin)}).mappings().fetchall()
     return [dict(row) for row in rows]
 
 
@@ -570,7 +1044,9 @@ def _duplicate_cleanup_ids(conn) -> tuple[set[int], set[int]]:
     return invoice_ids_to_delete, job_ids_to_delete
 
 
-def get_duplicate_cleanup_preview() -> dict[str, int]:
+def get_duplicate_cleanup_preview(is_admin: bool = False) -> dict[str, int]:
+    if not is_admin:
+        raise PermissionError("Chỉ quản trị viên mới được rà soát/xóa dữ liệu trùng.")
     engine = _make_engine()
     _ensure_table(engine)
     _ensure_jobs_table(engine)
@@ -579,8 +1055,10 @@ def get_duplicate_cleanup_preview() -> dict[str, int]:
     return {"invoice_count": len(invoice_ids), "job_count": len(job_ids)}
 
 
-def cleanup_duplicate_invoices() -> dict[str, int]:
+def cleanup_duplicate_invoices(is_admin: bool = False) -> dict[str, int]:
     """Delete exact duplicate invoice data and its success/failed history jobs."""
+    if not is_admin:
+        raise PermissionError("Chỉ quản trị viên mới được xóa dữ liệu trùng.")
     engine = _make_engine()
     _ensure_table(engine)
     _ensure_jobs_table(engine)
@@ -599,20 +1077,25 @@ def cleanup_duplicate_invoices() -> dict[str, int]:
     return {"invoice_count": len(invoice_ids), "job_count": len(job_ids)}
 
 
-def reset_job_to_processing(job_id: int) -> None:
+def reset_job_to_processing(job_id: int, user_id: int | None = None) -> None:
     """Đặt lại 1 job về trạng thái 'processing', xóa lỗi cũ -- dùng khi thử lại."""
     engine = _make_engine()
     with engine.begin() as conn:
         conn.execute(
             text("""
                 UPDATE processing_jobs
-                SET status = 'processing', error_message = NULL, error_reason = NULL,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
+                SET status = 'processing', updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND (:user_id IS NULL OR user_id = :user_id)
             """),
-            {"id": job_id},
+            {"id": job_id, "user_id": user_id},
         )
-def delete_selected_history_jobs(job_ids: list[int]) -> dict[str, int]:
+
+
+def delete_selected_history_jobs(
+    job_ids: list[int], is_admin: bool = False
+) -> dict[str, int]:
+    if not is_admin:
+        raise PermissionError("Chỉ quản trị viên mới được xóa lịch sử xử lý.")
     from sqlalchemy import bindparam
 
     selected_ids = sorted({int(job_id) for job_id in job_ids})
@@ -701,12 +1184,16 @@ def delete_selected_history_jobs(job_ids: list[int]) -> dict[str, int]:
         "invoice_count": len(invoices_to_delete),
     }
 
-def get_job_by_id(job_id: int) -> dict | None:
+def get_job_by_id(
+    job_id: int, user_id: int | None = None, is_admin: bool = False
+) -> dict | None:
     engine = _make_engine()
+    _ensure_jobs_table(engine)
+    ownership, params = _ownership_filter(user_id, is_admin)
     with engine.begin() as conn:
         row = conn.execute(
-            text("SELECT * FROM processing_jobs WHERE id = :id"),
-            {"id": job_id},
+            text(f"SELECT * FROM processing_jobs WHERE id = :id AND {ownership}"),
+            {"id": job_id, **params},
         ).mappings().fetchone()
     return dict(row) if row else None   
 
@@ -729,7 +1216,7 @@ def backfill_jobs_from_invoices() -> int:
         }
 
         invoices = conn.execute(
-            text("SELECT id, source_image, created_at FROM invoices")
+            text("SELECT id, source_image, created_at, user_id FROM invoices")
         ).mappings().fetchall()
 
         inserted = 0
@@ -739,14 +1226,15 @@ def backfill_jobs_from_invoices() -> int:
             conn.execute(
                 text("""
                     INSERT INTO processing_jobs
-                        (file_name, source_image, status, invoice_id, created_at, updated_at)
+                        (file_name, source_image, status, invoice_id, user_id, created_at, updated_at)
                     VALUES
-                        (:file_name, :source_image, 'success', :invoice_id, :created_at, :created_at)
+                        (:file_name, :source_image, 'success', :invoice_id, :user_id, :created_at, :created_at)
                 """),
                 {
-                    "file_name": inv["source_image"],
+                    "file_name": inv["source_image"] or f"Hóa đơn cũ #{inv['id']}",
                     "source_image": inv["source_image"],
                     "invoice_id": inv["id"],
+                    "user_id": inv["user_id"],
                     "created_at": inv["created_at"],
                 },
             )
@@ -754,13 +1242,14 @@ def backfill_jobs_from_invoices() -> int:
 
         return inserted
 __all__ = [
-    "save_invoice_to_db", "get_processed_image_names", "get_all_invoices",
-    "get_confirmed_invoices", "update_invoice_data", "set_invoice_accounting_status",
+    "initialize_database", "save_invoice_to_db", "get_processed_image_names", "get_all_invoices",
+    "get_confirmed_invoices", "get_invoice_count", "set_invoice_source_image",
+    "update_invoice_data", "set_invoice_accounting_status",
     "set_invoice_payment_status",
-    "create_job", "get_upload_duplicate_candidates", "cancel_failed_job",
+    "create_job", "get_upload_duplicate_candidates",
     "mark_job_success", "mark_job_duplicate", "mark_job_failed",
     "get_duplicate_cleanup_preview", "cleanup_duplicate_invoices",
     "get_job_counts", "get_recent_jobs", "get_jobs_by_ids", "get_all_jobs",
     "get_friendly_error_reason",
-    "delete_selected_history_jobs",
+    "delete_selected_history_jobs", "describe_database",
 ]

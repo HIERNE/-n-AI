@@ -1,7 +1,10 @@
 import streamlit as st
+st.set_page_config(page_title="Lịch sử hóa đơn", layout="wide")
+
 from pathlib import Path
 import pandas as pd
 import sys
+import html
 from datetime import datetime
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -14,8 +17,12 @@ from src.storage.db_handler import (
     get_duplicate_cleanup_preview,
     get_full_history,
 )
+from app.components.auth import render_account_menu, require_auth
 
-st.set_page_config(page_title="Lịch sử hóa đơn", layout="wide")
+user = require_auth()
+USER_ID = int(user["id"])
+IS_ADMIN = user["role"] == "admin"
+
 css_path = Path(__file__).resolve().parents[1] / "style.css"
 st.markdown(
     f"<style>{css_path.read_text(encoding='utf-8')}</style>",
@@ -25,6 +32,7 @@ st.markdown(
 from app.components.sidebar_nav import render_sidebar
 
 render_sidebar("history")
+render_account_menu()
 
 
 def _strip_html_indent(html: str) -> str:
@@ -41,7 +49,10 @@ col_title, col_status, col_period = st.columns([3, 1, 1])
 
 with col_title:
     st.title("Lịch sử hóa đơn")
-    st.caption("Toàn bộ hóa đơn đã xử lý trong hệ thống")
+    st.caption(
+        "Toàn bộ hóa đơn đã xử lý trong hệ thống"
+        if IS_ADMIN else "Lịch sử hóa đơn do tài khoản của bạn xử lý"
+    )
 
 with col_status:
     st.markdown(
@@ -63,13 +74,13 @@ cleanup_notice = st.session_state.pop("duplicate_cleanup_notice", None)
 if cleanup_notice:
     st.success(cleanup_notice)
 
-history = get_full_history()
+history = get_full_history(user_id=USER_ID, is_admin=IS_ADMIN)
 deletable_rows = [
     row for row in history
     if row["status"] in {"duplicate", "failed"}
 ]
 
-if deletable_rows:
+if IS_ADMIN and deletable_rows:
     st.subheader("Xóa hóa đơn trùng hoặc bị lỗi")
 
     row_by_label = {
@@ -100,45 +111,46 @@ if deletable_rows:
             for label in selected_labels
         ]
 
-        deleted = delete_selected_history_jobs(selected_job_ids)
+        deleted = delete_selected_history_jobs(selected_job_ids, is_admin=True)
 
         st.session_state["history_delete_notice"] = (
             f"Đã xóa {deleted['job_count']} dòng lịch sử và "
             f"{deleted['invoice_count']} bản ghi trích xuất trùng."
         )
         st.rerun()
-else:
+elif IS_ADMIN:
     st.info("Không có hóa đơn trùng hoặc bị lỗi để xóa.")
 
 delete_notice = st.session_state.pop("history_delete_notice", None)
 if delete_notice:
     st.success(delete_notice)
-# --- Xóa hóa đơn trùng ---
-duplicate_cleanup = get_duplicate_cleanup_preview()
 
-if duplicate_cleanup["invoice_count"] or duplicate_cleanup["job_count"]:
-    st.warning(
-        "Đã tìm thấy "
-        f"{duplicate_cleanup['invoice_count']} bản ghi dữ liệu hóa đơn trùng chính xác "
-        f"và {duplicate_cleanup['job_count']} dòng lịch sử trùng/lỗi có thể xóa. "
-        "Hệ thống sẽ giữ lại bản gốc được xử lý sớm nhất."
-    )
+if IS_ADMIN:
+    duplicate_cleanup = get_duplicate_cleanup_preview(is_admin=True)
 
-    confirm_cleanup = st.checkbox(
-        "Tôi xác nhận xóa các bản ghi trùng khỏi lịch sử và dữ liệu trích xuất."
-    )
-
-    if st.button(
-        "Xóa hóa đơn trùng",
-        type="primary",
-        disabled=not confirm_cleanup,
-    ):
-        deleted = cleanup_duplicate_invoices()
-        st.session_state["duplicate_cleanup_notice"] = (
-            f"Đã xóa {deleted['job_count']} dòng lịch sử và "
-            f"{deleted['invoice_count']} bản ghi trích xuất bị trùng."
+    if duplicate_cleanup["invoice_count"] or duplicate_cleanup["job_count"]:
+        st.warning(
+            "Đã tìm thấy "
+            f"{duplicate_cleanup['invoice_count']} bản ghi dữ liệu hóa đơn trùng chính xác "
+            f"và {duplicate_cleanup['job_count']} dòng lịch sử trùng/lỗi có thể xóa. "
+            "Hệ thống sẽ giữ lại bản gốc được xử lý sớm nhất."
         )
-        st.rerun()
+
+        confirm_cleanup = st.checkbox(
+            "Tôi xác nhận xóa các bản ghi trùng khỏi lịch sử và dữ liệu trích xuất."
+        )
+
+        if st.button(
+            "Xóa hóa đơn trùng",
+            type="primary",
+            disabled=not confirm_cleanup,
+        ):
+            deleted = cleanup_duplicate_invoices(is_admin=True)
+            st.session_state["duplicate_cleanup_notice"] = (
+                f"Đã xóa {deleted['job_count']} dòng lịch sử và "
+                f"{deleted['invoice_count']} bản ghi trích xuất bị trùng."
+            )
+            st.rerun()
 
 
 # --- 4 thẻ tổng quan ---
@@ -235,23 +247,33 @@ else:
     rows_html = ""
 
     for row in filtered:
-        invoice_code = f"INV-{row['created_at'].year}-{row['job_id']:04d}"
+        created_at = pd.to_datetime(row["created_at"])
+        invoice_code = f"INV-{created_at.year}-{row['job_id']:04d}"
         total_amount = (
             f"{row['tong_thanh_toan']:,.0f} đ"
             if row["tong_thanh_toan"] is not None
             else "—"
         )
+        uploader_cell = ""
+        if IS_ADMIN:
+            uploader = row.get("uploader_full_name") or row.get(
+                "uploader_username"
+            ) or "Chưa xác định"
+            uploader_cell = (
+                f"<td>{html.escape(str(uploader))}</td>"
+            )
 
         row_html = f"""
         <tr>
             <td><span style="color:#4F46E5; font-weight:700;">{invoice_code}</span></td>
-            <td>📄 {row['file_name'] or '—'}</td>
-            <td>{row['ten_cong_ty_ban'] or '—'}</td>
-            <td>{row['ma_so_thue_ban'] or '—'}</td>
-            <td>{row.get('so_hoa_don') or '—'}</td>
-            <td>{row['ngay_lap'] or '—'}</td>
+            <td>📄 {html.escape(str(row['file_name'] or '—'))}</td>
+            {uploader_cell}
+            <td>{html.escape(str(row['ten_cong_ty_ban'] or '—'))}</td>
+            <td>{html.escape(str(row['ma_so_thue_ban'] or '—'))}</td>
+            <td>{html.escape(str(row.get('so_hoa_don') or '—'))}</td>
+            <td>{html.escape(str(row['ngay_lap'] or '—'))}</td>
             <td style="font-weight:700;">{total_amount}</td>
-            <td style="color:#94A3B8;">{row['created_at'].strftime('%d/%m/%Y %H:%M')}</td>
+            <td style="color:#94A3B8;">{created_at.strftime('%d/%m/%Y %H:%M')}</td>
             <td>{STATUS_BADGE.get(row['status'], '—')}</td>
         </tr>
         """
@@ -265,6 +287,7 @@ else:
                 <tr style="background:#F8FAFC; text-transform:uppercase; font-size:12px; color:#64748B;">
                     <th style="text-align:left; padding:12px 16px;">Mã hóa đơn</th>
                     <th style="text-align:left; padding:12px 16px;">Tên tệp</th>
+                    {"<th style='text-align:left; padding:12px 16px;'>Người tải lên</th>" if IS_ADMIN else ""}
                     <th style="text-align:left; padding:12px 16px;">Nhà cung cấp</th>
                     <th style="text-align:left; padding:12px 16px;">MST</th>
                     <th style="text-align:left; padding:12px 16px;">Số hóa đơn</th>
@@ -292,15 +315,7 @@ else:
     ]
 
     if failed_rows:
-        st.write("")
-        with st.expander(f"🔴 Xem chi tiết {len(failed_rows)} hóa đơn lỗi"):
-            for row in failed_rows:
-                st.markdown(
-                    f"**{row['file_name']}** — "
-                    f"{row['error_reason'] or 'Không xác định'}"
-                )
-                st.code(
-                    row["error_message"] or "(không có thông tin)",
-                    language="text",
-                )
-                st.divider()
+        st.info(
+            f"{len(failed_rows)} hóa đơn không được xử lý thành công. "
+            "Chi tiết kỹ thuật đã được ghi vào file log máy chủ."
+        )

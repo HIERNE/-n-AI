@@ -1,4 +1,6 @@
 import streamlit as st
+st.set_page_config(page_title="Hạch toán kế toán", layout="wide")
+
 import pandas as pd
 from pathlib import Path
 import sys
@@ -12,10 +14,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.storage.db_handler import get_confirmed_invoices, set_invoice_payment_status
+from app.components.auth import render_account_menu, require_admin
 from app.components.sidebar_nav import render_sidebar
 
-st.set_page_config(page_title="Hạch toán kế toán", layout="wide")
+admin_user = require_admin()
+admin_user_id = int(admin_user["id"])
 render_sidebar("accounting")
+render_account_menu()
 css_path = Path(__file__).resolve().parents[1] / "style.css"
 st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
@@ -25,7 +30,7 @@ payment_notice = st.session_state.pop("payment_status_notice", None)
 if payment_notice:
     st.success(payment_notice)
 
-invoices = get_confirmed_invoices()
+invoices = get_confirmed_invoices(is_admin=True)
 
 
 def format_amount(value):
@@ -196,7 +201,12 @@ else:
         invoice_id = edited_invoice["ID"]
         selected_status = payment_status_values[edited_invoice["Tình trạng thanh toán"]]
         if selected_status != current_status_by_id[invoice_id]:
-            set_invoice_payment_status(invoice_id, selected_status)
+            set_invoice_payment_status(
+                invoice_id,
+                selected_status,
+                is_admin=True,
+                actor_user_id=admin_user_id,
+            )
             updated_count += 1
 
     if updated_count:

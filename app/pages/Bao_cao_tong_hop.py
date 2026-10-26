@@ -1,6 +1,9 @@
 import streamlit as st
+st.set_page_config(page_title="Báo cáo tổng hợp", layout="wide")
+
 from pathlib import Path
 import sys
+import html
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
@@ -9,13 +12,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.storage.db_handler import get_all_invoices, get_confirmed_invoices, get_recent_jobs
+from src.storage.db_handler import (
+    get_all_invoices,
+    get_confirmed_invoices,
+    get_recent_jobs,
+)
 from src.structuring.invoice_validation import validate_invoice_data
 from src.structuring.duplicate_detection import find_duplicate_groups
+from app.components.auth import render_account_menu, require_auth
 from app.components.sidebar_nav import render_sidebar
 
-st.set_page_config(page_title="Báo cáo tổng hợp", layout="wide")
+user = require_auth()
+USER_ID = int(user["id"])
+IS_ADMIN = user["role"] == "admin"
 render_sidebar("report")
+render_account_menu()
 css_path = Path(__file__).resolve().parents[1] / "style.css"
 st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
@@ -31,7 +42,7 @@ with col_period:
     st.markdown(f'<div class="status-badge" style="background:#EEF2FF;color:#4F46E5;">Kỳ: T{now.month}/{now.year}</div>', unsafe_allow_html=True)
 
 st.subheader("Báo cáo sai lệch dữ liệu")
-all_invoices = get_all_invoices()
+all_invoices = get_all_invoices(user_id=USER_ID, is_admin=IS_ADMIN)
 invoices_with_findings = []
 for invoice in all_invoices:
     findings = validate_invoice_data(invoice)
@@ -46,7 +57,8 @@ for invoice in all_invoices:
         })
 
 warning_count = sum(row["Số cảnh báo"] for row in invoices_with_findings)
-metric_invoice, metric_findings = st.columns(2)
+metric_total, metric_invoice, metric_findings = st.columns(3)
+metric_total.metric("Tổng hóa đơn", len(all_invoices))
 metric_invoice.metric("Hóa đơn cần rà soát", len(invoices_with_findings))
 metric_findings.metric("Tổng số cảnh báo", warning_count)
 if invoices_with_findings:
@@ -91,7 +103,7 @@ st.caption(
 )
 st.divider()
 
-invoices = get_confirmed_invoices()
+invoices = get_confirmed_invoices(user_id=USER_ID, is_admin=IS_ADMIN)
 
 if not invoices:
     st.info("Chưa có dữ liệu để báo cáo.")
@@ -284,6 +296,7 @@ with col_sup:
             max_value = top_suppliers["tong_tien"].max()
             for i, row in top_suppliers.iterrows():
                 pct = (row["tong_tien"] / max_value) * 100
+                safe_supplier_name = html.escape(str(row["ten_cong_ty_ban"]))
                 st.markdown(f"""
                 <div style="display:flex; align-items:center; gap:12px; padding:9px 0;
                             {'border-top:1px solid #F1F5F9;' if i > 0 else ''}">
@@ -292,7 +305,7 @@ with col_sup:
                         {i+1:02d}
                     </div>
                     <div style="flex:1;">
-                        <div style="font-weight:600; color:#0F172A; font-size:13.5px;">{row['ten_cong_ty_ban']}</div>
+                        <div style="font-weight:600; color:#0F172A; font-size:13.5px;">{safe_supplier_name}</div>
                         <div style="background:#F1F5F9; border-radius:999px; height:5px; margin-top:5px; width:160px;">
                             <div style="background:#4F46E5; height:5px; border-radius:999px; width:{pct:.0f}%;"></div>
                         </div>
@@ -308,7 +321,7 @@ with col_activity:
         st.caption(now.strftime("%d/%m/%Y"))
 
         today_jobs = [
-            j for j in get_recent_jobs(limit=50)
+            j for j in get_recent_jobs(limit=50, user_id=USER_ID, is_admin=IS_ADMIN)
             if j["created_at"].date() == now.date()
         ]
 
@@ -332,11 +345,12 @@ with col_activity:
                 dot = STATUS_DOT.get(job["status"], "#94A3B8")
                 text = STATUS_TEXT.get(job["status"], job["status"])
                 time_str = job["created_at"].strftime("%H:%M")
+                safe_file_name = html.escape(str(job["file_name"] or ""))
                 st.markdown(f"""
                 <div style="display:flex; align-items:center; gap:10px; padding:8px 0;
                             {'border-top:1px solid #F1F5F9;' if i > 0 else ''}">
                     <span style="width:7px; height:7px; border-radius:50%; background:{dot}; flex-shrink:0;"></span>
-                    <div style="flex:1; font-size:13px; color:#1E293B;">{job['file_name']}</div>
+                    <div style="flex:1; font-size:13px; color:#1E293B;">{safe_file_name}</div>
                     <div style="font-size:11px; color:#94A3B8;">{time_str}</div>
                     <div style="font-size:11px; color:{dot}; font-weight:600; min-width:60px; text-align:right;">{text}</div>
                 </div>
