@@ -1,13 +1,13 @@
-import streamlit as st
-st.set_page_config(page_title="Hạch toán kế toán", layout="wide")
-
-import pandas as pd
-from pathlib import Path
 import sys
+from pathlib import Path
+from datetime import datetime
 from io import BytesIO
-
+import pandas as pd
+import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+
+st.set_page_config(page_title="Hạch toán kế toán - InvoiceAI", page_icon="🧮", layout="wide")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -21,21 +21,43 @@ admin_user = require_admin()
 admin_user_id = int(admin_user["id"])
 render_sidebar("accounting")
 render_account_menu()
-css_path = Path(__file__).resolve().parents[1] / "style.css"
-st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
-st.title("🧮 Hạch toán kế toán")
-st.caption("Tổng hợp số liệu để phục vụ hạch toán")
+# --- Nạp style.css chuẩn hệ thống ---
+css_path = Path(__file__).resolve().parents[1] / "style.css"
+if css_path.exists():
+    st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+
+# --- Header Banner Kỹ thuật ---
+current_month_year = f"T{datetime.now().month}/{datetime.now().year}"
+
+st.markdown(f"""
+<div class="page-header">
+    <div class="page-header-left">
+        <div class="page-header-badge"><span>🧮</span> Quản lý tài chính & Báo cáo</div>
+        <h1>Hạch toán kế toán</h1>
+        <p>Tổng hợp số liệu hóa đơn đã xác nhận, theo dõi dòng tiền thanh toán và xuất dữ liệu báo cáo.</p>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px; z-index:1;">
+        <div class="header-period-pill">
+            <span>Kỳ kế toán</span>
+            {current_month_year}
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 payment_notice = st.session_state.pop("payment_status_notice", None)
 if payment_notice:
-    st.success(payment_notice)
+    st.markdown(f"""
+    <div class="success-notice">
+        <span>✅</span> {payment_notice}
+    </div>
+    """, unsafe_allow_html=True)
 
 invoices = get_confirmed_invoices(is_admin=True)
 
-
 def format_amount(value):
     return f"{value:,.0f}".replace(",", ".") if value is not None else "—"
-
 
 def create_excel_export(records):
     headers = [
@@ -103,31 +125,43 @@ unpaid_invoices = [
 paid_total = sum(invoice.get("tong_thanh_toan") or 0 for invoice in paid_invoices)
 unpaid_total = sum(invoice.get("tong_thanh_toan") or 0 for invoice in unpaid_invoices)
 
-filter_col, count_col, paid_col, unpaid_col = st.columns([1.35, 0.8, 1.1, 1.15])
-with filter_col:
-    with st.container(border=True):
-        st.markdown("**Bộ lọc thanh toán**")
-        payment_filter = st.selectbox(
-            "Lọc danh sách",
-            ["Tất cả", "Chưa thanh toán", "Đã thanh toán"],
-            label_visibility="collapsed",
-        )
-        st.caption("Áp dụng cho bảng và tệp Excel")
-with count_col:
-    with st.container(border=True):
-        st.metric("Tổng hóa đơn", len(invoices))
-with paid_col:
-    with st.container(border=True):
-        st.metric(
-            "Đã thanh toán",
-            f"{len(paid_invoices)} · {paid_total:,.0f} đ",
-        )
-with unpaid_col:
-    with st.container(border=True):
-        st.metric(
-            "Chưa thanh toán",
-            f"{len(unpaid_invoices)} · {unpaid_total:,.0f} đ",
-        )
+# --- Thẻ số liệu tổng quan & Bộ lọc ---
+col_filter, col_metrics = st.columns([1, 2.5])
+
+with col_filter:
+    st.markdown("""
+    <div class="accounting-filter-card">
+        <div style="font-size: 13px; font-weight: 700; color: #1E293B; margin-bottom: 6px;">🔍 Bộ lọc trạng thái</div>
+    """, unsafe_allow_html=True)
+    payment_filter = st.selectbox(
+        "Lọc danh sách",
+        ["Tất cả", "Chưa thanh toán", "Đã thanh toán"],
+        label_visibility="collapsed",
+    )
+    st.markdown('<div style="font-size: 11.5px; color: #64748B; margin-top: 4px;">Áp dụng bộ lọc cho bảng dữ liệu và tệp Excel</div></div>', unsafe_allow_html=True)
+
+with col_metrics:
+    st.markdown(f"""
+    <div class="metric-grid" style="margin-bottom:0;">
+        <div class="metric-card blue" data-icon="📑">
+            <div class="metric-label">Tổng đã xác nhận</div>
+            <div class="metric-value">{len(invoices)}</div>
+            <div class="metric-sub">Hóa đơn sẵn sàng hạch toán</div>
+        </div>
+        <div class="metric-card green" data-icon="💳">
+            <div class="metric-label">Đã thanh toán</div>
+            <div class="metric-value">{len(paid_invoices)}</div>
+            <div class="metric-sub">{paid_total:,.0f} đ</div>
+        </div>
+        <div class="metric-card orange" data-icon="⏳">
+            <div class="metric-label">Chưa thanh toán</div>
+            <div class="metric-value">{len(unpaid_invoices)}</div>
+            <div class="metric-sub">{unpaid_total:,.0f} đ</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.write("")
 
 filtered_invoices = [
     invoice for invoice in invoices
@@ -136,21 +170,45 @@ filtered_invoices = [
 ]
 
 if not invoices:
-    st.info("Chưa có dữ liệu hóa đơn để hạch toán.")
+    st.markdown("""
+    <div class="empty-state">
+        <div class="empty-state-icon">📋</div>
+        <h3>Chưa có dữ liệu hạch toán</h3>
+        <p>Hiện chưa có hóa đơn nào được xác nhận để đưa vào danh sách hạch toán kế toán.</p>
+    </div>
+    """, unsafe_allow_html=True)
 elif not filtered_invoices:
-    st.info("Không có hóa đơn phù hợp với tình trạng thanh toán đã chọn.")
+    st.markdown("""
+    <div class="empty-state">
+        <div class="empty-state-icon">🔍</div>
+        <h3>Không tìm thấy kết quả</h3>
+        <p>Không có hóa đơn nào phù hợp với tình trạng thanh toán đã chọn.</p>
+    </div>
+    """, unsafe_allow_html=True)
 else:
     total_before_tax = sum(r.get("tong_tien_hang") or 0 for r in filtered_invoices)
     total_vat = sum(r.get("tien_thue_vat") or 0 for r in filtered_invoices)
     total_payment = sum(r.get("tong_thanh_toan") or 0 for r in filtered_invoices)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Tiền hàng theo bộ lọc", f"{total_before_tax:,.0f} đ")
-    c2.metric("Thuế VAT theo bộ lọc", f"{total_vat:,.0f} đ")
-    c3.metric("Tổng thanh toán theo bộ lọc", f"{total_payment:,.0f} đ")
+    st.markdown(f"""
+    <div class="finance-summary-grid">
+        <div class="finance-cell">
+            <div class="finance-cell-label">Tiền hàng (Theo bộ lọc)</div>
+            <div class="finance-cell-value">{total_before_tax:,.0f} đ</div>
+        </div>
+        <div class="finance-cell">
+            <div class="finance-cell-label">Thuế VAT (Theo bộ lọc)</div>
+            <div class="finance-cell-value">{total_vat:,.0f} đ</div>
+        </div>
+        <div class="finance-cell">
+            <div class="finance-cell-label">Tổng thanh toán (Theo bộ lọc)</div>
+            <div class="finance-cell-value highlight">{total_payment:,.0f} đ</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.divider()
-    st.markdown(f"##### Chi tiết {len(filtered_invoices)} hóa đơn")
+    st.markdown(f"##### 📊 Chi tiết {len(filtered_invoices)} hóa đơn hạch toán")
+    
     invoice_rows = [
         {
             "STT": index,
@@ -172,6 +230,7 @@ else:
         }
         for index, record in enumerate(filtered_invoices, start=1)
     ]
+    
     edited_invoices = st.data_editor(
         pd.DataFrame(invoice_rows),
         use_container_width=True,
@@ -215,15 +274,28 @@ else:
         )
         st.rerun()
 
-    st.download_button(
-        "⬇️ Xuất Excel các hóa đơn đã hạch toán",
-        data=create_excel_export(filtered_invoices),
-        file_name="hoa_don_hach_toan_theo_bo_loc.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    # --- Khối Xuất file Excel ---
+    col_dl_left, col_dl_right = st.columns([2, 1])
+    with col_dl_left:
+        st.markdown("""
+        <div style="font-size: 13px; color: #475569; margin-top: 10px;">
+            💡 <b>Mẹo kỹ thuật:</b> Tệp Excel xuất ra đã được định dạng tự động các công thức tính tổng (SUM), định dạng tiền tệ và bộ lọc dữ liệu sẵn cho phòng kế toán.
+        </div>
+        """, unsafe_allow_html=True)
+    with col_dl_right:
+        st.download_button(
+            "⬇️ Xuất Excel đã hạch toán",
+            data=create_excel_export(filtered_invoices),
+            file_name="hoa_don_hach_toan_theo_bo_loc.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+        )
 
     st.divider()
-    st.info(
-        "⚙️ Tính năng định khoản tự động (sinh bút toán Nợ/Có theo tài khoản kế toán) "
-        "nằm trong hướng phát triển tiếp theo của đồ án, ngoài phạm vi 9 buổi hiện tại."
-    )
+    st.markdown("""
+    <div class="info-bar">
+        <span>⚙️</span>
+        <span><b>Lưu ý:</b> Tính năng định khoản tự động (sinh bút toán Nợ/Có theo hệ thống tài khoản kế toán Việt Nam) đang được phát triển nâng cấp trong các phiên bản tiếp theo.</span>
+    </div>
+    """, unsafe_allow_html=True)

@@ -1,11 +1,11 @@
-import streamlit as st
-st.set_page_config(page_title="InvoiceAI", page_icon="📄", layout="wide")
-
 import hashlib
 import html
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
+import streamlit as st
+
+st.set_page_config(page_title="InvoiceAI", page_icon="📄", layout="wide")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) in sys.path:
@@ -19,18 +19,26 @@ LLM_API_CONFIGURED = bool(
     config.GEMINI_API_KEYS or config.XAI_API_KEY or config.DEEPSEEK_API_KEY
 )
 
+from app.components.auth import render_account_menu, require_auth
+user = require_auth()
+USER_ID = int(user["id"])
+IS_ADMIN = user["role"] == "admin"
+
 from src.preprocessing.pdf_converter import pdf_to_images
 from src.pipeline import process_invoice_with_job_tracking
 from src.storage.db_handler import (
     get_jobs_by_ids, get_job_counts, get_all_invoices, get_confirmed_invoices, create_job,
     get_upload_duplicate_candidates, mark_job_duplicate, mark_job_failed,
 )
-from app.components.auth import render_account_menu, require_auth
 
-user = require_auth()
-USER_ID = int(user["id"])
-IS_ADMIN = user["role"] == "admin"
+# --- Nạp style.css chuẩn hệ thống ---
+css_path = Path(__file__).parent / "style.css"
+if css_path.exists():
+    st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
+from app.components.sidebar_nav import render_sidebar
+render_sidebar("upload")
+render_account_menu()
 
 def prepare_image_path(saved_path: Path) -> Path:
     if saved_path.suffix.lower() == ".pdf":
@@ -38,11 +46,9 @@ def prepare_image_path(saved_path: Path) -> Path:
         return Path(image_paths[0])
     return saved_path
 
-
 def fmt_money(value):
     """Định dạng tiền an toàn — trả về '—' nếu giá trị bị thiếu (None)."""
     return f"{value:,.0f} đ" if value is not None else "—"
-
 
 def is_stuck(created_at, minutes: int = 2) -> bool:
     """Coi 1 job 'processing' là bị kẹt/gián đoạn nếu đã tạo quá N phút mà chưa xong."""
@@ -54,58 +60,83 @@ def is_stuck(created_at, minutes: int = 2) -> bool:
     if not isinstance(created_at, datetime):
         return False
 
-    # SQL databases may return either naive or timezone-aware datetimes.
     now = datetime.now(created_at.tzinfo) if created_at.tzinfo else datetime.now()
     return now - created_at > timedelta(minutes=minutes)
 
+# --- Header Banner Kỹ thuật (Chuẩn style.css) ---
+current_month_year = f"T{datetime.now().month}/{datetime.now().year}"
+status_html = ('<span style="color:#22C55E;font-size:12px;">●</span> Hệ thống hoạt động' if LLM_API_CONFIGURED 
+               else '<span style="color:#EF4444;font-size:12px;">●</span> Chưa cấu hình API')
 
-css_path = Path(__file__).parent / "style.css"
-st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
-
-from app.components.sidebar_nav import render_sidebar
-render_sidebar("upload")
-render_account_menu()
-
-# --- Header ---
-col_title, col_status, col_period = st.columns([3, 1, 1])
-with col_title:
-    st.title("Tải lên hóa đơn")
-    st.caption("Nhập hóa đơn từ PDF, ảnh")
-with col_status:
-    st.markdown('<div class="status-badge status-done">🟢 Hệ thống hoạt động</div>', unsafe_allow_html=True)
-with col_period:
-    st.markdown(
-        f'<div class="status-badge" style="background:#EEF2FF;color:#4F46E5;">Kỳ: T{datetime.now().month}/{datetime.now().year}</div>',
-        unsafe_allow_html=True,
-    )
-
-st.write("")
+st.markdown(f"""
+<div class="page-header">
+    <div class="page-header-left">
+        <div class="page-header-badge"><span>⚡</span> Nền tảng trích xuất thông minh</div>
+        <h1>Tải lên hóa đơn</h1>
+        <p>Hỗ trợ nhập liệu tự động hóa đơn từ định dạng PDF và hình ảnh (PNG, JPG, JPEG).</p>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px; z-index:1;">
+        <div style="background:rgba(255,255,255,0.15); padding:6px 14px; border-radius:10px; font-size:12.5px; color:#FFFFFF; font-weight:600; border:1px solid rgba(255,255,255,0.2);">
+            {status_html}
+        </div>
+        <div class="header-period-pill">
+            <span>Kỳ kế toán</span>
+            {current_month_year}
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 if DATABASE_IS_SQLITE:
-    st.warning(
-        "Ứng dụng đang dùng SQLite. Trên Streamlit Community Cloud, dữ liệu SQLite "
-        "trên ổ đĩa có thể mất khi ứng dụng khởi động lại. Hãy cấu hình DATABASE_URL "
-        "trong Secrets để dùng cơ sở dữ liệu bền vững."
-    )
+    st.markdown("""
+    <div class="warn-notice">
+        <span>⚠️</span> 
+        <span>Ứng dụng đang dùng SQLite. Trên Streamlit Community Cloud, dữ liệu trên ổ đĩa có thể mất khi khởi động lại. Hãy cấu hình <code>DATABASE_URL</code> trong Secrets để dùng cơ sở dữ liệu bền vững.</span>
+    </div>
+    """, unsafe_allow_html=True)
 
 if not LLM_API_CONFIGURED:
-    st.error(
-        "Chưa cấu hình API key cho Gemini, xAI hoặc DeepSeek. "
-        "Thêm GEMINI_API_KEY (hoặc API key nhà cung cấp khác) vào Secrets của ứng dụng "
-        "Streamlit Cloud để bật xử lý hóa đơn."
-    )
+    st.markdown("""
+    <div class="warn-notice" style="background:#FEE2E2; border-color:#F87171; color:#991B1B;">
+        <span>❌</span> 
+        <span>Chưa cấu hình API key cho Gemini, xAI hoặc DeepSeek. Thêm <code>GEMINI_API_KEY</code> vào Secrets của ứng dụng Streamlit Cloud để bật xử lý hóa đơn.</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-# --- Thẻ số liệu tổng quan — đọc trực tiếp từ DB, bền vững toàn hệ thống ---
+# --- Thẻ số liệu tổng quan (Metric Grid chuẩn CSS) ---
 counts = get_job_counts(user_id=USER_ID, is_admin=IS_ADMIN)
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Tổng hóa đơn", len(get_all_invoices(user_id=USER_ID, is_admin=IS_ADMIN)))
-c2.metric("Đã xử lý", counts["success"])
-c3.metric("Hạch toán", len(get_confirmed_invoices(user_id=USER_ID, is_admin=IS_ADMIN)))
-c4.metric("Đang xử lý", counts["processing"])
-c5.metric("Lỗi", counts["failed"])
+total_invoices_count = len(get_all_invoices(user_id=USER_ID, is_admin=IS_ADMIN))
+success_count = counts["success"]
+confirmed_count = len(get_confirmed_invoices(user_id=USER_ID, is_admin=IS_ADMIN))
+processing_count = counts["processing"]
+failed_count = counts["failed"]
 
-st.write("")
+st.markdown(f"""
+<div class="metric-grid">
+    <div class="metric-card blue" data-icon="📊">
+        <div class="metric-label">Tổng hóa đơn</div>
+        <div class="metric-value">{total_invoices_count}</div>
+        <div class="metric-sub">Đã lưu trữ trong hệ thống</div>
+    </div>
+    <div class="metric-card green" data-icon="🟢">
+        <div class="metric-label">Đã xử lý thành công</div>
+        <div class="metric-value">{success_count}</div>
+        <div class="metric-sub">Sẵn sàng kiểm tra & hạch toán</div>
+    </div>
+    <div class="metric-card purple" data-icon="✅">
+        <div class="metric-label">Đã hạch toán</div>
+        <div class="metric-value">{confirmed_count}</div>
+        <div class="metric-sub">Hoàn tất quy trình kế toán</div>
+    </div>
+    <div class="metric-card orange" data-icon="⏳">
+        <div class="metric-label">Đang xử lý / Lỗi</div>
+        <div class="metric-value">{processing_count} / {failed_count}</div>
+        <div class="metric-sub">Hàng đợi & tiến trình AI</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
+# --- Dropzone Tải lên ---
 uploaded_files = st.file_uploader(
     "Kéo thả hóa đơn vào đây, hoặc chọn tệp từ máy tính",
     type=["pdf", "png", "jpg", "jpeg"],
@@ -114,7 +145,7 @@ uploaded_files = st.file_uploader(
 )
 
 if "session_job_ids" not in st.session_state:
-    st.session_state["session_job_ids"] = {}  # {tên_file:digest: job_id}
+    st.session_state["session_job_ids"] = {} 
 if "duplicate_upload_decisions" not in st.session_state:
     st.session_state["duplicate_upload_decisions"] = {}
 
@@ -158,36 +189,27 @@ for uploaded_file in uploaded_files or []:
             mark_job_duplicate(job_id, resolved_duplicate["invoice_id"], user_id=USER_ID)
             st.session_state["session_job_ids"][upload_key] = job_id
             st.session_state["duplicate_upload_decisions"].pop(upload_key, None)
-            st.info(
-                f"Đã nhận diện **{html.escape(upload_name)}** trùng nội dung với hóa đơn đã trích xuất. "
-                f"Không chạy OCR; lịch sử liên kết dữ liệu hóa đơn #{resolved_duplicate['invoice_id']}."
-            )
+            st.markdown(f"""
+            <div class="info-bar">
+                <span>🔁</span> Đã nhận diện <b>{html.escape(upload_name)}</b> trùng nội dung với hóa đơn #{resolved_duplicate['invoice_id']}. Bỏ qua OCR.
+            </div>
+            """, unsafe_allow_html=True)
             continue
 
         match_labels = ", ".join(
             f"job #{match['job_id']} ({match.get('status')})"
             for match in duplicate_matches
         )
-        st.warning(
-            f"⚠️ Tệp **{html.escape(upload_name)}** có nội dung giống hóa đơn đã tải lên trước đó "
-            f"({match_labels}). Chưa chạy OCR."
-        )
+        st.warning(f"⚠️ Tệp **{html.escape(upload_name)}** có nội dung giống hóa đơn đã tải lên trước đó ({match_labels}).")
+        
         decision = st.session_state["duplicate_upload_decisions"].get(upload_key)
         if decision is None:
-            continue_col, skip_col = st.columns(2)
-            with continue_col:
-                continue_processing = st.button(
-                    "Tiếp tục xử lý",
-                    type="primary",
-                    key=f"continue_duplicate_{upload_key}",
-                    use_container_width=True,
-                )
-            with skip_col:
-                skip_processing = st.button(
-                    "Bỏ qua hóa đơn này",
-                    key=f"skip_duplicate_{upload_key}",
-                    use_container_width=True,
-                )
+            c_col, s_col = st.columns(2)
+            with c_col:
+                continue_processing = st.button("Tiếp tục xử lý", type="primary", key=f"continue_dup_{upload_key}", use_container_width=True)
+            with s_col:
+                skip_processing = st.button("Bỏ qua hóa đơn này", key=f"skip_dup_{upload_key}", use_container_width=True)
+            
             if continue_processing:
                 decision = "continue"
                 st.session_state["duplicate_upload_decisions"][upload_key] = decision
@@ -198,7 +220,7 @@ for uploaded_file in uploaded_files or []:
                 continue
 
         if decision == "skip":
-            st.info(f"Đã bỏ qua **{html.escape(upload_name)}**. OCR không được chạy.")
+            st.info(f"Đã bỏ qua **{html.escape(upload_name)}**.")
             continue
 
     save_dir = Path("data/uploads") / f"user_{USER_ID}"
@@ -212,9 +234,6 @@ for uploaded_file in uploaded_files or []:
     if not save_path.exists():
         save_path.write_bytes(uploaded_bytes)
 
-    # TẠO JOB NGAY LẬP TỨC — trước khi convert PDF / OCR / gọi Gemini.
-    # Dù bị bấm X ngắt ngang ngay sau dòng này, job vẫn đã nằm chắc trong DB,
-    # không biến mất khi refresh trang.
     job_id = create_job(
         upload_name,
         source_image=str(save_path),
@@ -226,11 +245,10 @@ for uploaded_file in uploaded_files or []:
     progress = st.status(f"Đang xử lý: {upload_name}", expanded=True)
     try:
         if save_path.suffix.lower() == ".pdf":
-            progress.write("📄 Đang chuyển đổi PDF sang ảnh...")
+            progress.write("📄 Đang chuyển đổi PDF sang ảnh tài liệu...")
         image_path = prepare_image_path(save_path)
 
-        progress.write("🔍 Đang nhận diện chữ (OCR)...")
-        # progress.write("🤖 Đang trích xuất dữ liệu bằng AI...")
+        progress.write("🔍 Đang nhận diện cấu trúc hóa đơn và AI trích xuất dữ liệu...")
 
         result = process_invoice_with_job_tracking(
             str(image_path),
@@ -241,41 +259,27 @@ for uploaded_file in uploaded_files or []:
         )
 
         if result["status"] == "success":
-            extracted_duplicate_matches = result.get("duplicate_matches", [])
-            if extracted_duplicate_matches:
-                matched_ids = ", ".join(
-                    f"#{invoice.get('id')}" for invoice in extracted_duplicate_matches
-                )
-                progress.write(
-                    f"⚠️ Dữ liệu trích xuất trùng hoặc nghi trùng với hóa đơn {matched_ids}. "
-                    "Hóa đơn vẫn được lưu để bạn kiểm tra."
-                )
             progress.update(
-                label=(
-                    f"⚠️ Đã xử lý, cần kiểm tra trùng: {upload_name}"
-                    if extracted_duplicate_matches or duplicate_matches
-                    else f"✔ Đã trích xuất, chờ xác nhận: {upload_name}"
-                ),
+                label=f"✔ Hoàn tất trích xuất: {upload_name}",
                 state="complete",
-                expanded=bool(extracted_duplicate_matches or duplicate_matches),
+                expanded=False,
             )
         else:
-            progress.update(label=f"✘ Thất bại: {upload_name}", state="error")
+            progress.update(label=f"✘ Xử lý thất bại: {upload_name}", state="error")
 
     except Exception as e:
-        progress.update(label=f"✘ Thất bại: {upload_name}", state="error")
+        progress.update(label=f"✘ Lỗi hệ thống: {upload_name}", state="error")
         mark_job_failed(job_id, error_message=str(e), user_id=USER_ID)
     finally:
         st.session_state["duplicate_upload_decisions"].pop(upload_key, None)
 
 if st.session_state["session_job_ids"]:
-    if st.button("🔄 Làm mới / tải thêm hóa đơn khác"):
+    if st.button("🔄 Làm mới phiên làm việc / Tải thêm hóa đơn"):
         st.session_state["session_job_ids"] = {}
         st.rerun()
 
-# --- Hóa đơn gần đây — đọc từ processing_jobs, hiển thị đủ trạng thái + nút thử lại ---
-st.write("")
-st.markdown("##### 📋 Hóa đơn gần đây")
+# --- Hóa đơn gần đây ---
+st.markdown("### 📋 Tiến trình hóa đơn gần đây")
 
 recent_jobs = get_jobs_by_ids(
     list(st.session_state["session_job_ids"].values()),
@@ -293,7 +297,13 @@ for job in recent_jobs:
 recent_jobs = unique_recent_jobs
 
 if not recent_jobs:
-    st.info("Phiên này chưa xử lý hóa đơn nào.")
+    st.markdown("""
+    <div class="empty-state">
+        <div class="empty-state-icon">📄</div>
+        <h3>Chưa có hóa đơn nào trong phiên này</h3>
+        <p>Hãy tải lên tài liệu hóa đơn phía trên để hệ thống bắt đầu tự động trích xuất thông tin.</p>
+    </div>
+    """, unsafe_allow_html=True)
 else:
     for job in recent_jobs:
         needs_retry = job["status"] in {"failed", "processing"}
@@ -301,54 +311,49 @@ else:
         if needs_retry:
             is_failed = job["status"] == "failed"
             is_interrupted = not is_failed and is_stuck(job["created_at"])
-            label = "Lỗi" if is_failed else "Bị gián đoạn" if is_interrupted else "Chờ xử lý"
-            default_reason = (
-                "Quá trình xử lý bị ngắt giữa chừng (có thể do hủy tải lên)"
-                if is_interrupted or is_failed
-                else "Hóa đơn đang chờ xử lý. Bạn có thể thử lại nếu lần xử lý trước đã bị hủy."
-            )
-            reason = default_reason
+            label = "Lỗi xử lý" if is_failed else "Bị gián đoạn" if is_interrupted else "Đang chờ hàng đợi"
             icon = "🔴" if is_failed else "🟡"
-            badge_class = "status-failed" if is_failed else "status-pending"
-            with st.expander(f"{icon} {label}: {job['file_name']}  —  {job['created_at']}"):
-                st.markdown(f'<span class="status-badge {badge_class}">{icon} {label}</span>', unsafe_allow_html=True)
-                st.markdown(f"**Lý do:** {reason}")
-                if st.button("🔄 Thử lại", key=f"retry_{job['id']}"):
+            badge_class = "badge-failed" if is_failed else "badge-processing"
+            
+            with st.expander(f"{icon} [{job['id']}] {job['file_name']} — {job['created_at']}"):
+                st.markdown(f'<span class="badge {badge_class}"><span class="badge-dot"></span> {label}</span>', unsafe_allow_html=True)
+                st.write(f"**Thời gian:** {job['created_at']}")
+                if st.button("🔄 Thử lại trích xuất", key=f"retry_job_{job['id']}", type="primary"):
                     source_path = Path(job["source_image"]) if job["source_image"] else None
                     if not source_path or not source_path.exists():
-                        st.error("Không tìm thấy file gốc, vui lòng tải lên lại.")
+                        st.error("Không tìm thấy file nguồn gốc trên hệ thống, vui lòng tải lên lại từ đầu.")
                     else:
                         try:
-                            with st.spinner("Đang xử lý lại..."):
+                            with st.spinner("Đang thực hiện lại quy trình OCR & AI..."):
                                 image_path = prepare_image_path(source_path)
                                 retry_result = process_invoice_with_job_tracking(
                                     str(image_path), file_name=job["file_name"], job_id=job["id"],
                                     user_id=USER_ID,
                                 )
                                 if retry_result["status"] == "failed":
-                                    st.error("Thử xử lý lại chưa thành công. Chi tiết đã được ghi vào file log.")
-                            st.rerun()
+                                    st.error("Thử lại chưa thành công. Vui lòng kiểm tra lại định dạng tệp tin.")
+                                st.rerun()
                         except Exception as e:
                             mark_job_failed(job["id"], error_message=str(e), user_id=USER_ID)
-                            st.error("Thử xử lý lại chưa thành công. Chi tiết đã được ghi vào file log.")
+                            st.error(f"Lỗi: {e}")
         else:
-            status_badge = (
-                '<div class="status-badge status-done">🟢 Hoàn tất</div>'
-                if job["status"] == "success"
-                else '<div class="status-badge status-duplicate">🔁 Trùng hóa đơn</div>'
-                if job["status"] == "duplicate"
-                else '<div class="status-badge status-pending">🟡 Đang xử lý</div>'
-            )
-            safe_file_name = html.escape(str(job["file_name"] or ""))
+            status_map = {
+                "success": ("badge-success", "Hoàn tất trích xuất", "🟢"),
+                "duplicate": ("badge-duplicate", "Trùng lặp hóa đơn", "🔁")
+            }
+            b_class, b_text, b_icon = status_map.get(job["status"], ("badge-processing", "Đang xử lý", "🟡"))
+            
             st.markdown(f"""
-            <div class="invoice-card">
-                <div style="display:flex; align-items:center; gap:12px;">
-                    <span style="font-size:20px;">📄</span>
+            <div class="tech-card" style="padding: 14px 18px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span style="font-size: 22px;">📄</span>
                     <div>
-                        <div class="invoice-card-name">{safe_file_name}</div>
-                        <div class="invoice-card-date">{job['created_at']}</div>
+                        <div style="font-weight: 700; color: #0F172A; font-size: 14px;">{html.escape(str(job['file_name']))}</div>
+                        <div style="font-size: 11.5px; color: #64748B;">Khởi tạo lúc: {job['created_at']}</div>
                     </div>
                 </div>
-                {status_badge}
+                <div>
+                    <span class="badge {b_class}"><span class="badge-dot"></span> {b_text}</span>
+                </div>
             </div>
             """, unsafe_allow_html=True)

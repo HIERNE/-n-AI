@@ -1,13 +1,13 @@
-/* ===== Font đẹp hơn font mặc định ===== */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* ===== Font chuẩn hệ thống & Inter ===== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 
 html, body, [class*="css"] {
     font-family: 'Inter', -apple-system, sans-serif;
 }
 
-/* ===== Nền tổng thể dịu mắt hơn màu trắng thuần ===== */
-.stApp {
-    background-color: #F1F5F9;
+/* Nền app */
+.stApp, [data-testid="stAppViewContainer"] {
+    background-color: #F8FAFC !important;
 }
 
 /* ===== SIDEBAR ===== */
@@ -23,8 +23,6 @@ section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 {
     color: #FFFFFF !important;
 }
-
-/* Link điều hướng trong sidebar — bo góc, hiệu ứng hover */
 section[data-testid="stSidebar"] a[data-testid="stSidebarNavLink"] {
     border-radius: 8px;
     margin: 2px 8px;
@@ -42,7 +40,7 @@ section[data-testid="stSidebar"] a[aria-selected="true"] * {
     font-weight: 600 !important;
 }
 
-/* ===== TIÊU ĐỀ TRANG ===== */
+/* ===== TIÊU ĐỀ CHUNG ===== */
 h1 {
     font-weight: 800 !important;
     color: #0F172A !important;
@@ -53,51 +51,464 @@ h2, h3 {
     color: #1E293B !important;
 }
 
-/* ===== THẺ SỐ LIỆU (metric cards) — thêm bóng đổ, hover nhẹ ===== */
+/* ===== PAGE HEADER BANNER (Kỹ thuật & Hiện đại) ===== */
+.page-header {
+    background: linear-gradient(135deg, #1E293B 0%, #2E3DA6 55%, #4F46E5 100%);
+    border-radius: 16px;
+    padding: 24px 32px;
+    margin-bottom: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 8px 24px rgba(30, 41, 59, 0.12);
+    position: relative;
+    overflow: hidden;
+}
+.page-header::before {
+    content: '';
+    position: absolute; top: -30px; right: -30px;
+    width: 160px; height: 160px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 50%;
+}
+.page-header::after {
+    content: '';
+    position: absolute; bottom: -50px; right: 100px;
+    width: 200px; height: 200px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 50%;
+}
+.page-header-left { z-index: 1; }
+.page-header h1 {
+    color: #FFFFFF !important;
+    margin: 0 0 6px 0 !important;
+    font-size: 24px !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.5px;
+}
+.page-header p {
+    color: rgba(255, 255, 255, 0.82) !important;
+    margin: 0 !important;
+    font-size: 13.5px;
+}
+.page-header-badge {
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 20px;
+    color: #FFFFFF;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 12px;
+    letter-spacing: 0.6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+}
+.header-period-pill {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 12px;
+    color: #FFFFFF;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    z-index: 1;
+    text-align: center;
+    backdrop-filter: blur(4px);
+}
+.header-period-pill span {
+    display: block;
+    font-size: 10.5px;
+    opacity: 0.75;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+/* ===== THẺ CHỈ SỐ METRIC (Grid & Cards) ===== */
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 22px;
+}
+.metric-card {
+    background: #FFFFFF;
+    border-radius: 14px;
+    padding: 18px 20px;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+.metric-card::after {
+    content: attr(data-icon);
+    position: absolute;
+    right: 16px; top: 16px;
+    font-size: 26px;
+    opacity: 0.12;
+}
+.metric-label {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #64748B;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 6px;
+}
+.metric-value {
+    font-size: 26px;
+    font-weight: 800;
+    color: #0F172A;
+    line-height: 1.1;
+    margin-bottom: 4px;
+    font-family: 'Inter', sans-serif;
+}
+.metric-sub {
+    font-size: 12px;
+    color: #94A3B8;
+}
+.metric-card.blue   { border-top: 3.5px solid #4F46E5; }
+.metric-card.green  { border-top: 3.5px solid #10B981; }
+.metric-card.orange { border-top: 3.5px solid #F59E0B; }
+.metric-card.purple { border-top: 3.5px solid #8B5CF6; }
+
+/* Fallback stMetric mặc định */
 div[data-testid="stMetric"] {
     background-color: white;
     border: 1px solid #E2E8F0;
     border-radius: 14px;
-    padding: 20px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
-    transition: box-shadow 0.2s ease, transform 0.2s ease;
-}
-div[data-testid="stMetric"]:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    transform: translateY(-2px);
-}
-div[data-testid="stMetric"] label {
-    color: #64748B !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-div[data-testid="stMetricValue"] {
-    color: #0F172A !important;
-    font-weight: 800 !important;
-    font-size: 32px !important;
+    padding: 18px 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
-/* ===== BADGE trạng thái — bo tròn kiểu pill, có dot ===== */
+/* ===== STATUS BADGES & PILLS ===== */
 .status-badge {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 14px;
+    padding: 5px 12px;
     border-radius: 999px;
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 600;
 }
 .status-done { background-color: #DCFCE7; color: #15803D; }
-.status-duplicate { background-color: #EDE9FE; color: #6D28D9; }
-.status-pending { background-color: #FEF3C7; color: #B45309; }
+.status-duplicate { background-color: #FEF3C7; color: #92400E; }
+.status-pending { background-color: #DBEAFE; color: #1E40AF; }
 .status-failed { background-color: #FEE2E2; color: #B91C1C; }
 
-/* ===== KHUNG UPLOAD — bo góc lớn hơn, đổi màu khi hover ===== */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 99px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+}
+.badge-dot {
+    width: 6.5px; height: 6.5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.badge-success { background: #DCFCE7; color: #15803D; }
+.badge-success .badge-dot { background: #22C55E; box-shadow: 0 0 0 2px #BBF7D0; }
+.badge-duplicate { background: #FEF3C7; color: #92400E; }
+.badge-duplicate .badge-dot { background: #F59E0B; }
+.badge-processing { background: #DBEAFE; color: #1E40AF; }
+.badge-processing .badge-dot { background: #3B82F6; }
+.badge-failed { background: #FEE2E2; color: #991B1B; }
+.badge-failed .badge-dot { background: #EF4444; }
+
+/* Stat pills row */
+.stat-row {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.stat-pill {
+    border-radius: 99px; padding: 4px 12px;
+    font-size: 12px; font-weight: 600;
+    cursor: default;
+    border: 1px solid transparent;
+}
+
+/* ===== BẢNG DỮ LIỆU LỊCH SỬ HÓA ĐƠN KỸ THUẬT ===== */
+.inv-table-scroll-hint {
+    margin: 0 0 8px;
+    color: #64748B;
+    font-size: 12px;
+}
+.inv-table-wrap {
+    background: #FFFFFF;
+    border-radius: 14px;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: scroll !important;
+    overflow-y: hidden;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+    margin-bottom: 24px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: auto;
+    scrollbar-color: #94A3B8 #E2E8F0;
+}
+.inv-table-wrap::-webkit-scrollbar {
+    height: 12px;
+}
+.inv-table-wrap::-webkit-scrollbar-track {
+    background: #E2E8F0;
+}
+.inv-table-wrap::-webkit-scrollbar-thumb {
+    background: #94A3B8;
+    border: 2px solid #E2E8F0;
+    border-radius: 6px;
+}
+.inv-table {
+    width: max-content;
+    min-width: 1200px;
+    border-collapse: collapse;
+    font-size: 13.5px;
+}
+.inv-table thead tr {
+    background: #F8FAFC;
+    border-bottom: 2px solid #E2E8F0;
+}
+.inv-table thead th {
+    text-align: left;
+    padding: 12px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #64748B;
+    white-space: nowrap;
+}
+.inv-table tbody tr {
+    border-bottom: 1px solid #F1F5F9;
+    transition: background-color 0.12s ease;
+}
+.inv-table tbody tr:last-child { border-bottom: none; }
+.inv-table tbody tr:hover { background-color: #F8FAFF; }
+.inv-table tbody tr:nth-child(even) { background-color: #FAFCFF; }
+.inv-table td {
+    padding: 12px 14px;
+    vertical-align: middle;
+    color: #1E293B;
+}
+
+.inv-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    font-weight: 700;
+    background: #EEF2FF;
+    color: #4F46E5;
+    border-radius: 6px;
+    padding: 2.5px 8px;
+    display: inline-block;
+    border: 1px solid #C7D2FE;
+}
+.file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #F1F5F9;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: #334155;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.uploader-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: #4F46E5;
+    background: #EEF2FF;
+    border-radius: 99px;
+    padding: 2.5px 8px;
+}
+.amount-cell {
+    font-weight: 700;
+    color: #0F766E;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+}
+.amount-none { color: #CBD5E1; }
+.date-cell { color: #64748B; font-size: 12px; white-space: nowrap; }
+.row-idx { color: #94A3B8; font-size: 11.5px; font-weight: 600; text-align: center; }
+
+/* ===== NOTICES VÀ BẢNG THÔNG BÁO ADMIN ===== */
+.success-notice {
+    background: #DCFCE7;
+    border: 1px solid #86EFAC;
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: #15803D;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.warn-notice {
+    background: #FFFBEB;
+    border: 1px solid #FCD34D;
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: #92400E;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.info-bar {
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: #1E40AF;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+}
+.empty-state {
+    text-align: center;
+    padding: 50px 24px;
+    background: #FFFFFF;
+    border-radius: 14px;
+    border: 1px solid #E2E8F0;
+    margin-bottom: 20px;
+}
+.empty-state-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.6; }
+.empty-state h3 { color: #1E293B; margin-bottom: 6px; }
+.empty-state p { color: #64748B; font-size: 13.5px; }
+
+/* ===== TECH WORKSPACE CHO TRANG TRÍCH XUẤT DỮ LIỆU ===== */
+.tech-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+    margin-bottom: 20px;
+}
+.tech-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 14px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid #F1F5F9;
+}
+.tech-card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0F172A;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.tech-card-tag {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    background: #EEF2FF;
+    color: #4F46E5;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid #C7D2FE;
+}
+.doc-viewer-frame {
+    background: #0F172A;
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 480px;
+    justify-content: center;
+    border: 1px solid #1E293B;
+}
+.doc-meta-bar {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #64748B;
+}
+.finance-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin: 16px 0;
+}
+.finance-cell {
+    text-align: center;
+}
+.finance-cell-label {
+    font-size: 11px;
+    color: #64748B;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.finance-cell-value {
+    font-size: 17px;
+    font-weight: 800;
+    color: #0F172A;
+    font-family: 'JetBrains Mono', monospace;
+}
+.finance-cell-value.highlight {
+    color: #2563EB;
+}
+
+/* NÚT BẤM */
+.stButton > button, .stDownloadButton > button {
+    border-radius: 9px !important;
+    font-weight: 600 !important;
+    transition: all 0.15s ease !important;
+}
+.stButton > button[kind="primary"] {
+    background-color: #4F46E5 !important;
+    border: none !important;
+    box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
+}
+.stButton > button[kind="primary"]:hover {
+    background-color: #4338CA !important;
+    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+}
+
+/* UPLOAD DROPZONE */
 div[data-testid="stFileUploaderDropzone"] {
     border: 2px dashed #C7D2FE;
-    border-radius: 16px;
+    border-radius: 14px;
     background-color: #F8FAFF;
     padding: 8px;
     transition: border-color 0.2s ease, background-color 0.2s ease;
@@ -106,85 +517,35 @@ div[data-testid="stFileUploaderDropzone"]:hover {
     border-color: #4F46E5;
     background-color: #F5F3FF;
 }
-div[data-testid="stFileUploaderDropzoneInstructions"] * {
-    color: #1E293B !important;
-}
 
-/* ===== CARD hóa đơn gần đây ===== */
-.invoice-card {
-    background: white;
+/* DATA EDITOR & DATAFRAME */
+div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+/* ===== TRANG HẠCH TOÁN KẾ TOÁN ===== */
+.accounting-filter-card {
+    background: #FFFFFF;
     border: 1px solid #E2E8F0;
     border-radius: 12px;
     padding: 14px 18px;
-    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+.excel-export-bar {
+    background: #F0FDF4;
+    border: 1px solid #BBF7D0;
+    border-radius: 12px;
+    padding: 16px 20px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-    transition: box-shadow 0.15s ease;
+    margin-top: 20px;
 }
-.invoice-card:hover {
-    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
-}
-.invoice-card-name {
+.excel-export-text {
+    font-size: 13.5px;
+    color: #166534;
     font-weight: 600;
-    color: #0F172A;
-    font-size: 15px;
-}
-.invoice-card-date {
-    color: #94A3B8;
-    font-size: 13px;
-}
-
-/* ===== NÚT BẤM — bo góc, đổ bóng nhẹ khi hover ===== */
-.stButton > button, .stDownloadButton > button {
-    border-radius: 10px !important;
-    font-weight: 600 !important;
-    transition: all 0.15s ease !important;
-}
-.stButton > button[kind="primary"] {
-    background-color: #4F46E5 !important;
-    border: none !important;
-    box-shadow: 0 2px 6px rgba(79, 70, 229, 0.3);
-}
-.stButton > button[kind="primary"]:hover {
-    background-color: #4338CA !important;
-    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4);
-}
-
-/* ===== BẢNG DỮ LIỆU (dataframe) — bo góc, đổ bóng ===== */
-div[data-testid="stDataFrame"] {
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-/* ===== st.status (tiến trình xử lý) — bo góc đẹp hơn ===== */
-div[data-testid="stStatusWidget"] {
-    border-radius: 12px !important;
-    border: 1px solid #E2E8F0 !important;
-}
-
-/* ===== Divider tinh tế hơn mặc định ===== */
-hr {
-    margin: 24px 0 !important;
-    border-color: #E2E8F0 !important;
-}
-table tbody tr {
-    border-top: 1px solid #F1F5F9;
-    transition: background-color 0.15s ease;
-}
-table tbody tr:hover {
-    background-color: #F8FAFC;
-}
-table td {
-    padding: 14px 16px;
-    color: #1E293B;
-}
-
-/* Báo cáo tổng hợp*/
-div[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] > div {
-    border-radius: 14px !important;
-    border: 1px solid #E2E8F0 !important;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
 }

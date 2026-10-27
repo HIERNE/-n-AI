@@ -108,11 +108,13 @@ def render_sidebar(active_key: str):
 def render_guest_sidebar() -> None:
     with st.sidebar:
         st.markdown(
-            '<style>div[data-testid="stSidebarNav"] { display: none; }</style>',
+            """
+            <style>
+            section[data-testid="stSidebar"],
+            [data-testid="stSidebarCollapsedControl"] {
+                display: none !important;
+            }
+            </style>
+            """,
             unsafe_allow_html=True,
         )
-        _render_brand()
-        for item in NAV_ITEMS:
-            st.page_link(item["path"], label=item["label"], icon=item["icon"])
-        st.divider()
-        _render_summary(0, 0, 0, 0, 0)

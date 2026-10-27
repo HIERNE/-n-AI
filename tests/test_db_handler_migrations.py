@@ -186,6 +186,140 @@ class InvoiceDatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(authenticated_alice["role"], "user")
         self.assertIsNone(db_handler.authenticate_user("alice", "wrong-password"))
 
+    def test_user_can_delete_owned_history_and_unreferenced_invoice(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine):
+            user = db_handler.register_user("delete-user", "a-strong-password")
+            invoice_id = db_handler.save_invoice_to_db(
+                Invoice(
+                    ma_so_thue_ban="0312345678",
+                    ten_cong_ty_ban="Công ty cần xóa",
+                    ngay_lap="2026-10-10",
+                    tong_tien_hang=1000,
+                    thue_suat_vat="10%",
+                    tien_thue_vat=100,
+                    tong_thanh_toan=1100,
+                ),
+                "delete.jpg",
+                user_id=user["id"],
+            )
+            job_id = db_handler.create_job("delete.jpg", user_id=user["id"])
+            db_handler.mark_job_success(job_id, invoice_id, user_id=user["id"])
+
+            deleted = db_handler.delete_selected_history_jobs(
+                [job_id], user_id=user["id"]
+            )
+            with self.engine.connect() as connection:
+                remaining_job = connection.execute(
+                    text("SELECT id FROM processing_jobs WHERE id = :id"),
+                    {"id": job_id},
+                ).first()
+                remaining_invoice = connection.execute(
+                    text("SELECT id FROM invoices WHERE id = :id"),
+                    {"id": invoice_id},
+                ).first()
+
+        self.assertEqual(deleted, {"job_count": 1, "invoice_count": 1})
+        self.assertIsNone(remaining_job)
+        self.assertIsNone(remaining_invoice)
+
+    def test_user_cannot_delete_another_users_history(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine):
+            alice = db_handler.register_user("alice-delete", "a-strong-password")
+            bob = db_handler.register_user("bob-delete", "another-strong-password")
+            bob_job_id = db_handler.create_job("bob.pdf", user_id=bob["id"])
+
+            with self.assertRaises(PermissionError):
+                db_handler.delete_selected_history_jobs(
+                    [bob_job_id], user_id=alice["id"]
+                )
+
+            with self.engine.connect() as connection:
+                remaining_job = connection.execute(
+                    text("SELECT id FROM processing_jobs WHERE id = :id"),
+                    {"id": bob_job_id},
+                ).scalar_one()
+
+        self.assertEqual(remaining_job, bob_job_id)
+
+    def test_delete_keeps_invoice_used_by_another_history_job(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine):
+            user = db_handler.register_user("shared-delete", "a-strong-password")
+            invoice_id = db_handler.save_invoice_to_db(
+                Invoice(
+                    ma_so_thue_ban="0312345678",
+                    ten_cong_ty_ban="Công ty dùng chung",
+                    ngay_lap="2026-10-10",
+                    tong_tien_hang=1000,
+                    thue_suat_vat="10%",
+                    tien_thue_vat=100,
+                    tong_thanh_toan=1100,
+                ),
+                "shared.jpg",
+                user_id=user["id"],
+            )
+            first_job_id = db_handler.create_job("shared-1.jpg", user_id=user["id"])
+            second_job_id = db_handler.create_job("shared-2.jpg", user_id=user["id"])
+            db_handler.mark_job_success(first_job_id, invoice_id, user_id=user["id"])
+            db_handler.mark_job_success(second_job_id, invoice_id, user_id=user["id"])
+
+            deleted = db_handler.delete_selected_history_jobs(
+                [first_job_id], user_id=user["id"]
+            )
+            with self.engine.connect() as connection:
+                remaining_invoice = connection.execute(
+                    text("SELECT id FROM invoices WHERE id = :id"),
+                    {"id": invoice_id},
+                ).scalar_one()
+
+        self.assertEqual(deleted, {"job_count": 1, "invoice_count": 0})
+        self.assertEqual(remaining_invoice, invoice_id)
+
+    def test_deleting_duplicate_history_does_not_delete_original_invoice(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine):
+            user = db_handler.register_user("duplicate-delete", "a-strong-password")
+            invoice_id = db_handler.save_invoice_to_db(
+                Invoice(
+                    ma_so_thue_ban="0312345678",
+                    ten_cong_ty_ban="Hóa đơn gốc",
+                    ngay_lap="2026-10-10",
+                    tong_tien_hang=1000,
+                    thue_suat_vat="10%",
+                    tien_thue_vat=100,
+                    tong_thanh_toan=1100,
+                ),
+                "original.jpg",
+                user_id=user["id"],
+            )
+            original_job_id = db_handler.create_job(
+                "original.jpg", user_id=user["id"]
+            )
+            duplicate_job_id = db_handler.create_job(
+                "duplicate.jpg", user_id=user["id"]
+            )
+            db_handler.mark_job_success(
+                original_job_id, invoice_id, user_id=user["id"]
+            )
+            db_handler.mark_job_duplicate(
+                duplicate_job_id, invoice_id, user_id=user["id"]
+            )
+
+            deleted = db_handler.delete_selected_history_jobs(
+                [duplicate_job_id], user_id=user["id"]
+            )
+            with self.engine.connect() as connection:
+                remaining_invoice = connection.execute(
+                    text("SELECT id FROM invoices WHERE id = :id"),
+                    {"id": invoice_id},
+                ).scalar_one()
+                remaining_original_job = connection.execute(
+                    text("SELECT id FROM processing_jobs WHERE id = :id"),
+                    {"id": original_job_id},
+                ).scalar_one()
+
+        self.assertEqual(deleted, {"job_count": 1, "invoice_count": 0})
+        self.assertEqual(remaining_invoice, invoice_id)
+        self.assertEqual(remaining_original_job, original_job_id)
+
     def test_registration_accepts_six_character_password_only(self):
         with patch.object(db_handler, "_make_engine", return_value=self.engine):
             with self.assertRaisesRegex(ValueError, "ít nhất 6 ký tự"):

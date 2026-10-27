@@ -1092,10 +1092,11 @@ def reset_job_to_processing(job_id: int, user_id: int | None = None) -> None:
 
 
 def delete_selected_history_jobs(
-    job_ids: list[int], is_admin: bool = False
+    job_ids: list[int], is_admin: bool = False, user_id: int | None = None
 ) -> dict[str, int]:
-    if not is_admin:
-        raise PermissionError("Chỉ quản trị viên mới được xóa lịch sử xử lý.")
+    """Delete selected history rows and unreferenced invoices owned by the caller."""
+    if not is_admin and user_id is None:
+        raise PermissionError("Cần xác định tài khoản để xóa lịch sử xử lý.")
     from sqlalchemy import bindparam
 
     selected_ids = sorted({int(job_id) for job_id in job_ids})
@@ -1107,81 +1108,89 @@ def delete_selected_history_jobs(
     _ensure_jobs_table(engine)
 
     with engine.begin() as conn:
-        duplicate_invoice_ids, _ = _duplicate_cleanup_ids(conn)
+        ownership, ownership_params = _ownership_filter(user_id, is_admin, "j.")
 
         selected_jobs = conn.execute(
-            text("""
-                SELECT id, status, invoice_id, source_hash
-                FROM processing_jobs
-                WHERE id IN :ids
+            text(f"""
+                SELECT j.id, j.status, j.invoice_id
+                FROM processing_jobs j
+                WHERE j.id IN :ids AND {ownership}
             """).bindparams(bindparam("ids", expanding=True)),
-            {"ids": selected_ids},
+            {
+                **ownership_params,
+                "ids": selected_ids,
+            },
         ).mappings().fetchall()
 
-        invoice_hashes = {
-            row[0]
-            for row in conn.execute(
-                text("SELECT source_hash FROM invoices WHERE source_hash IS NOT NULL")
-            ).fetchall()
+        if len(selected_jobs) != len(selected_ids):
+            raise PermissionError("Một hoặc nhiều hóa đơn không thuộc quyền truy cập của bạn.")
+        if any(job["status"] == "processing" for job in selected_jobs):
+            raise ValueError("Không thể xóa hóa đơn đang xử lý. Vui lòng thử lại sau.")
+
+        invoice_ids = {
+            job["invoice_id"]
+            for job in selected_jobs
+            if job["status"] == "success" and job["invoice_id"] is not None
         }
-
-        jobs_to_delete = set()
-        invoices_to_delete = set()
-
-        for job in selected_jobs:
-            invoice_id = job["invoice_id"]
-            is_failed_or_duplicate = job["status"] in {"failed", "duplicate"}
-            is_detected_duplicate = (
-                job["status"] == "success"
-                and (
-                    invoice_id in duplicate_invoice_ids
-                    or (
-                        invoice_id is None
-                        and job["source_hash"] in invoice_hashes
-                    )
-                )
-            )
-
-            if not (is_failed_or_duplicate or is_detected_duplicate):
-                continue
-
-            jobs_to_delete.add(job["id"])
-
-            if invoice_id in duplicate_invoice_ids:
-                invoices_to_delete.add(invoice_id)
-
-        if invoices_to_delete:
-            related_jobs = conn.execute(
-                text("""
-                    SELECT id
-                    FROM processing_jobs
-                    WHERE invoice_id IN :invoice_ids
-                """).bindparams(bindparam("invoice_ids", expanding=True)),
-                {"invoice_ids": sorted(invoices_to_delete)},
-            ).fetchall()
-            jobs_to_delete.update(row[0] for row in related_jobs)
-
-        if jobs_to_delete:
+        if selected_ids:
             conn.execute(
                 text("""
                     DELETE FROM processing_jobs
                     WHERE id IN :ids
                 """).bindparams(bindparam("ids", expanding=True)),
-                {"ids": sorted(jobs_to_delete)},
+                {"ids": selected_ids},
             )
 
-        if invoices_to_delete:
-            conn.execute(
-                text("""
-                    DELETE FROM invoices
-                    WHERE id IN :ids
-                """).bindparams(bindparam("ids", expanding=True)),
-                {"ids": sorted(invoices_to_delete)},
+        deleted_invoice_ids = set()
+        for invoice_id in invoice_ids:
+            invoice_ownership, invoice_params = _ownership_filter(
+                user_id, is_admin, "i."
             )
+            invoice = conn.execute(
+                text(f"""
+                    SELECT source_hash
+                    FROM invoices i
+                    WHERE i.id = :id AND {invoice_ownership}
+                """),
+                {"id": invoice_id, **invoice_params},
+            ).mappings().first()
+            if invoice is None:
+                continue
+
+            remaining_ownership, remaining_params = _ownership_filter(
+                user_id, is_admin, "j."
+            )
+            remaining_job = conn.execute(
+                text(f"""
+                    SELECT 1
+                    FROM processing_jobs j
+                    WHERE (j.invoice_id = :invoice_id
+                           OR (j.invoice_id IS NULL AND j.source_hash = :source_hash))
+                      AND {remaining_ownership}
+                    LIMIT 1
+                """),
+                {
+                    "invoice_id": invoice_id,
+                    "source_hash": invoice["source_hash"],
+                    **remaining_params,
+                },
+            ).first()
+            if remaining_job is None:
+                delete_invoice_ownership, delete_invoice_params = _ownership_filter(
+                    user_id, is_admin
+                )
+                conn.execute(
+                    text(f"""
+                        DELETE FROM invoices
+                        WHERE id = :id AND {delete_invoice_ownership}
+                    """),
+                    {"id": invoice_id, **delete_invoice_params},
+                )
+                deleted_invoice_ids.add(invoice_id)
 
     return {
-        "job_count": len(jobs_to_delete),
-        "invoice_count": len(invoices_to_delete),
+        "job_count": len(selected_jobs),
+        "invoice_count": len(deleted_invoice_ids),
     }
 
 def get_job_by_id(
