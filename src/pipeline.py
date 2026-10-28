@@ -23,27 +23,54 @@ from src.storage.db_handler import (
 )
 
 
-def extract_invoice(image_path: str):
-    """Chỉ trích xuất (OCR + LLM), CHƯA lưu DB."""
-    ocr_results = run_ocr(image_path)
-    full_text = "\n".join(r["text"] for r in ocr_results)
-    invoice = extract_invoice_data(full_text)
+def _normalize_image_paths(image_paths: str | Path | list[str] | tuple[str, ...]) -> list[str]:
+    if isinstance(image_paths, (str, Path)):
+        paths = [str(image_paths)]
+    else:
+        paths = [str(path) for path in image_paths]
+    if not paths:
+        raise ValueError("Không có trang ảnh nào để OCR.")
+    return paths
+
+
+def extract_invoice(image_paths: str | Path | list[str] | tuple[str, ...], progress_callback=None):
+    """OCR every page in order and extract one invoice from the combined text."""
+    paths = _normalize_image_paths(image_paths)
+    page_texts = []
+    total_pages = len(paths)
+    for page_number, image_path in enumerate(paths, start=1):
+        if progress_callback:
+            progress_callback(page_number, total_pages)
+        ocr_results = run_ocr(image_path)
+        page_text = "\n".join(result["text"] for result in ocr_results)
+        page_texts.append(f"=== TRANG {page_number}/{total_pages} ===\n{page_text}")
+
+    invoice = extract_invoice_data("\n\n".join(page_texts))
     return invoice
 
 
-def process_invoice(image_path: str, user_id: int | None = None):
+def process_invoice(
+    image_path: str | Path | list[str] | tuple[str, ...],
+    user_id: int | None = None,
+    source_image: str | Path | None = None,
+):
     """Pipeline cơ bản: ảnh -> OCR -> text -> LLM -> Invoice -> lưu MySQL. Không theo dõi job."""
-    invoice = extract_invoice(image_path)
-    record_id = save_invoice_to_db(invoice, source_image=image_path, user_id=user_id)
+    paths = _normalize_image_paths(image_path)
+    invoice = extract_invoice(paths)
+    record_id = save_invoice_to_db(
+        invoice, source_image=str(source_image or paths[0]), user_id=user_id
+    )
     return record_id
 
 
 def process_invoice_with_job_tracking(
-    image_path: str,
+    image_path: str | Path | list[str] | tuple[str, ...],
     file_name: str = None,
     job_id: int = None,
     source_hash: str = None,
     user_id: int | None = None,
+    source_image: str | Path | None = None,
+    progress_callback=None,
 ):
     """
     Giống process_invoice() nhưng ghi lại trạng thái job bền vững vào DB
@@ -53,11 +80,15 @@ def process_invoice_with_job_tracking(
     - Nếu job_id đã có (trường hợp bấm "Thử lại"): reset job đó về 'processing',
       không tạo thêm bản ghi lịch sử trùng lặp.
     """
-    file_name = file_name or Path(image_path).name
+    image_paths = _normalize_image_paths(image_path)
+    file_name = file_name or Path(source_image or image_paths[0]).name
 
     if job_id is None:
         job_id = create_job(
-            file_name, source_image=image_path, source_hash=source_hash, user_id=user_id
+            file_name,
+            source_image=str(source_image or image_paths[0]),
+            source_hash=source_hash,
+            user_id=user_id,
         )
     else:
         existing_job = get_job_by_id(
@@ -70,7 +101,7 @@ def process_invoice_with_job_tracking(
         reset_job_to_processing(job_id, user_id=user_id)
 
     try:
-        invoice = extract_invoice(image_path)
+        invoice = extract_invoice(image_paths, progress_callback=progress_callback)
         duplicate_candidate = invoice.model_dump()
         duplicate_groups = find_duplicate_groups([
             *get_all_invoices(user_id=user_id, is_admin=user_id is None),
@@ -90,7 +121,7 @@ def process_invoice_with_job_tracking(
         )
         invoice_id = save_invoice_to_db(
             invoice,
-            source_image=image_path,
+            source_image=str(source_image or image_paths[0]),
             source_hash=source_hash,
             user_id=user_id,
         )

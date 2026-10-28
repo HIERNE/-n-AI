@@ -173,16 +173,24 @@ else:
 
         if source_path is not None:
             if source_path.suffix.lower() == ".pdf":
-                preview_path = source_path.with_name(f"{source_path.stem}_page1.jpg")
-                if not preview_path.is_file():
-                    preview_path = Path(
-                        pdf_to_images(source_path, output_dir=source_path.parent)[0]
-                    )
+                preview_paths = [
+                    Path(path)
+                    for path in pdf_to_images(source_path, output_dir=source_path.parent)
+                ]
             else:
-                preview_path = source_path
+                preview_paths = [source_path]
 
-            # Khung hiển thị ảnh có style kỹ thuật
-            st.image(str(preview_path), use_column_width=True)
+            for page_number, preview_path in enumerate(preview_paths, start=1):
+                caption = (
+                    f"Trang {page_number}/{len(preview_paths)}"
+                    if source_path.suffix.lower() == ".pdf"
+                    else None
+                )
+                st.image(
+                    str(preview_path),
+                    caption=caption,
+                    use_column_width=True,
+                )
 
             file_size_kb = round(source_path.stat().st_size / 1024, 1)
             st.markdown(_strip(f"""
@@ -237,14 +245,25 @@ else:
                 if selected_source:
                     selected_path = source_options[selected_source]
                     if selected_path.suffix.lower() == ".pdf":
-                        preview_path = selected_path.with_name(f"{selected_path.stem}_page1.jpg")
-                        if not preview_path.is_file():
-                            preview_path = Path(
-                                pdf_to_images(selected_path, output_dir=selected_path.parent)[0]
+                        preview_paths = [
+                            Path(path)
+                            for path in pdf_to_images(
+                                selected_path, output_dir=selected_path.parent
                             )
+                        ]
                     else:
-                        preview_path = selected_path
-                    st.image(str(preview_path), use_column_width=True)
+                        preview_paths = [selected_path]
+                    for page_number, preview_path in enumerate(preview_paths, start=1):
+                        caption = (
+                            f"Trang {page_number}/{len(preview_paths)}"
+                            if selected_path.suffix.lower() == ".pdf"
+                            else None
+                        )
+                        st.image(
+                            str(preview_path),
+                            caption=caption,
+                            use_column_width=True,
+                        )
                     if st.button("Lưu liên kết tệp cho hóa đơn này", key=f"save_source_image_{record['id']}", type="primary"):
                         relative_path = selected_path.relative_to(PROJECT_ROOT).as_posix()
                         set_invoice_source_image(

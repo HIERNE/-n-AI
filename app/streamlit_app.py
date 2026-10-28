@@ -40,11 +40,13 @@ from app.components.sidebar_nav import render_sidebar
 render_sidebar("upload")
 render_account_menu()
 
-def prepare_image_path(saved_path: Path) -> Path:
+def prepare_image_paths(saved_path: Path) -> list[Path]:
     if saved_path.suffix.lower() == ".pdf":
-        image_paths = pdf_to_images(saved_path, output_dir=saved_path.parent)
-        return Path(image_paths[0])
-    return saved_path
+        return [
+            Path(image_path)
+            for image_path in pdf_to_images(saved_path, output_dir=saved_path.parent)
+        ]
+    return [saved_path]
 
 def fmt_money(value):
     """Định dạng tiền an toàn — trả về '—' nếu giá trị bị thiếu (None)."""
@@ -246,16 +248,20 @@ for uploaded_file in uploaded_files or []:
     try:
         if save_path.suffix.lower() == ".pdf":
             progress.write("📄 Đang chuyển đổi PDF sang ảnh tài liệu...")
-        image_path = prepare_image_path(save_path)
+        image_paths = prepare_image_paths(save_path)
+        progress.write(f"📄 Tài liệu có {len(image_paths)} trang.")
 
-        progress.write("🔍 Đang nhận diện cấu trúc hóa đơn và AI trích xuất dữ liệu...")
+        def report_page_progress(page_number: int, total_pages: int) -> None:
+            progress.write(f"🔍 Đang OCR trang {page_number}/{total_pages}...")
 
         result = process_invoice_with_job_tracking(
-            str(image_path),
+            [str(image_path) for image_path in image_paths],
             file_name=upload_name,
             job_id=job_id,
             source_hash=source_hash,
             user_id=USER_ID,
+            source_image=str(save_path),
+            progress_callback=report_page_progress,
         )
 
         if result["status"] == "success":
@@ -325,10 +331,16 @@ else:
                     else:
                         try:
                             with st.spinner("Đang thực hiện lại quy trình OCR & AI..."):
-                                image_path = prepare_image_path(source_path)
+                                image_paths = prepare_image_paths(source_path)
                                 retry_result = process_invoice_with_job_tracking(
-                                    str(image_path), file_name=job["file_name"], job_id=job["id"],
+                                    [str(image_path) for image_path in image_paths],
+                                    file_name=job["file_name"],
+                                    job_id=job["id"],
                                     user_id=USER_ID,
+                                    source_image=str(source_path),
+                                    progress_callback=lambda page, total: st.write(
+                                        f"OCR trang {page}/{total}..."
+                                    ),
                                 )
                                 if retry_result["status"] == "failed":
                                     st.error("Thử lại chưa thành công. Vui lòng kiểm tra lại định dạng tệp tin.")

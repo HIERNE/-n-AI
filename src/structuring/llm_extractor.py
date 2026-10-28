@@ -39,6 +39,11 @@ thành JSON đúng theo cấu trúc sau, không thêm giải thích, không thê
 
 Nếu không đọc được số hóa đơn trong OCR, hãy dùng null; không tự suy đoán.
 
+Lưu ý: Các đoạn "=== TRANG n/t ===" thuộc cùng một hóa đơn nhiều trang. Hãy hợp nhất
+thông tin và toàn bộ mặt hàng từ tất cả các trang thành một hóa đơn duy nhất. Bỏ qua
+phần đầu trang lặp lại; nếu trang sau tiếp tục bảng hàng hóa thì vẫn phải lấy các dòng đó.
+Ưu tiên tổng tiền ở phần tổng kết hóa đơn, không cộng lặp lại các tổng phụ xuất hiện ở nhiều trang.
+
 Text OCR:
 {ocr_text}
 """
