@@ -5,7 +5,11 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
 
-st.set_page_config(page_title="InvoiceAI", page_icon="📄", layout="wide")
+st.set_page_config(
+    page_title="InvoiceAI",
+    page_icon=str(Path(__file__).resolve().parent / "assets" / "invoiceai_logo.png"),
+    layout="wide",
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) in sys.path:

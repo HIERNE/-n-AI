@@ -10,6 +10,7 @@ from src.storage.db_handler import (
     register_user,
 )
 from src.logging_config import log_activity
+from app.components.brand import logo_data_uri
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}$")
 _DATABASE_INITIALIZED = False
@@ -63,12 +64,12 @@ def _show_terms_dialog():
 
 
 def _render_hero_column():
-    _render_html("""
+    _render_html(f"""
     <div class="auth-hero-pane">
         <!-- Logo góc trên bên trái -->
         <div class="hero-top-logo">
             <div class="hero-logo-box">
-                <img src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/%3E%3Cpolyline points='14 2 14 8 20 8'/%3E%3Cline x1='16' y1='13' x2='8' y2='13'/%3E%3Cline x1='16' y1='17' x2='8' y2='17'/%3E%3Cpolyline points='10 9 9 9 8 9'/%3E%3C/svg%3E" width="22" height="22" alt="InvoiceAI" />
+                <img src="{logo_data_uri()}" alt="InvoiceAI" />
             </div>
             <span class="hero-logo-title">InvoiceAI</span>
         </div>
@@ -297,6 +298,14 @@ def require_auth() -> dict:
             "ADMIN_PASSWORD trong biến môi trường/Secrets trước khi sử dụng."
         )
     st.stop()
+
+
+def require_admin() -> dict:
+    user = require_auth()
+    if user.get("role") != "admin":
+        st.error("Bạn không có quyền truy cập trang này. Chỉ quản trị viên mới được phép.")
+        st.stop()
+    return user
 
 
 def render_account_menu() -> None:

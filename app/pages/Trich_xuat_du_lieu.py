@@ -1,8 +1,13 @@
+from pathlib import Path
+
 import streamlit as st
-st.set_page_config(page_title="Trích xuất dữ liệu", layout="wide")
+st.set_page_config(
+    page_title="Trích xuất dữ liệu",
+    page_icon=str(Path(__file__).resolve().parents[1] / "assets" / "invoiceai_logo.png"),
+    layout="wide",
+)
 
 import json
-from pathlib import Path
 import sys
 import html
 from datetime import datetime

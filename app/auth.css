@@ -150,14 +150,16 @@ form div[data-testid="stHorizontalBlock"] :is(div[data-testid="column"], div[dat
 .hero-logo-box {
     width: 42px;
     height: 42px;
-    border-radius: 11px;
-    background: rgba(255, 255, 255, 0.16);
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    backdrop-filter: blur(8px);
     flex-shrink: 0;
+}
+.hero-logo-box img {
+    width: 42px;
+    height: 42px;
+    object-fit: contain;
 }
 .hero-logo-title {
     font-size: 21px;

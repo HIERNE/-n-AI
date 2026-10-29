@@ -1,7 +1,12 @@
-import streamlit as st
-st.set_page_config(page_title="Lịch sử hóa đơn", layout="wide")
-
 from pathlib import Path
+
+import streamlit as st
+st.set_page_config(
+    page_title="Lịch sử hóa đơn",
+    page_icon=str(Path(__file__).resolve().parents[1] / "assets" / "invoiceai_logo.png"),
+    layout="wide",
+)
+
 import pandas as pd
 import sys
 import html
