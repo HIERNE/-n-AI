@@ -55,7 +55,7 @@ st.markdown(_strip(f"""
     <div class="page-header-left">
         <div class="page-header-badge">
             <span style="width:7px;height:7px;background:#38BDF8;border-radius:50%;display:inline-block;"></span>
-            AI OCR &amp; DATA INSPECTION STUDIO
+            OCR &amp; DATA INSPECTION STUDIO
         </div>
         <h1>🔬 Trích xuất &amp; Kiểm toán dữ liệu</h1>
         <p>Bóc tách chi tiết thông tin hóa đơn, kiểm tra tính toàn vẹn số học và đối soát hóa đơn trùng lặp</p>
@@ -277,12 +277,12 @@ else:
                         st.success("Đã cập nhật liên kết tệp thành công.")
                         st.rerun()
 
-    # ─── CỘT PHẢI: AI DATA INSPECTION & VALIDATION ────────────────────────────
+    # ─── CỘT PHẢI: DATA INSPECTION & VALIDATION ───────────────────────────────
     with col_right:
         st.markdown(_strip("""
         <div class="tech-card-header">
             <div class="tech-card-title">
-                <span>🤖</span> Bóc tách AI &amp; Kiểm toán (Audit Inspector)
+                <span>📋</span> Bóc tách &amp; Kiểm toán (Audit Inspector)
             </div>
             <span class="tech-card-tag">SCHEMA V2.0</span>
         </div>

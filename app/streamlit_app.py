@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 st.set_page_config(
-    page_title="InvoiceAI",
+    page_title="Invoice Pro",
     page_icon=str(Path(__file__).resolve().parent / "assets" / "invoiceai_logo.png"),
     layout="wide",
 )
@@ -105,7 +105,7 @@ if not LLM_API_CONFIGURED:
     st.markdown("""
     <div class="warn-notice" style="background:#FEE2E2; border-color:#F87171; color:#991B1B;">
         <span>❌</span> 
-        <span>Chưa cấu hình API key cho Gemini, xAI hoặc DeepSeek. Thêm <code>GEMINI_API_KEY</code> vào Secrets của ứng dụng Streamlit Cloud để bật xử lý hóa đơn.</span>
+        <span>Chưa cấu hình dịch vụ xử lý hóa đơn. Quản trị viên cần thêm khóa dịch vụ vào Secrets của ứng dụng Streamlit Cloud.</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -137,7 +137,7 @@ st.markdown(f"""
     <div class="metric-card orange" data-icon="⏳">
         <div class="metric-label">Đang xử lý / Lỗi</div>
         <div class="metric-value">{processing_count} / {failed_count}</div>
-        <div class="metric-sub">Hàng đợi & tiến trình AI</div>
+        <div class="metric-sub">Hàng đợi & tiến trình xử lý</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -334,7 +334,7 @@ else:
                         st.error("Không tìm thấy file nguồn gốc trên hệ thống, vui lòng tải lên lại từ đầu.")
                     else:
                         try:
-                            with st.spinner("Đang thực hiện lại quy trình OCR & AI..."):
+                            with st.spinner("Đang thực hiện lại quy trình nhận dạng & xử lý..."):
                                 image_paths = prepare_image_paths(source_path)
                                 retry_result = process_invoice_with_job_tracking(
                                     [str(image_path) for image_path in image_paths],

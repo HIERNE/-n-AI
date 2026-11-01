@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 st.set_page_config(
-    page_title="Hạch toán kế toán - InvoiceAI",
+    page_title="Hạch toán kế toán - Invoice Pro",
     page_icon=str(Path(__file__).resolve().parents[1] / "assets" / "invoiceai_logo.png"),
     layout="wide",
 )

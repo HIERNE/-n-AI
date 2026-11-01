@@ -1,7 +1,7 @@
-# Smart Invoice Parser
+# Invoice Pro
 
 Hệ thống tự động trích xuất và số hóa thông tin hóa đơn GTGT (hóa đơn đỏ)
-sử dụng OCR (PaddleOCR + VietOCR) kết hợp LLM (Gemini API) để cấu trúc hóa dữ liệu.
+sử dụng OCR (PaddleOCR + VietOCR) và dịch vụ xử lý ngôn ngữ để cấu trúc hóa dữ liệu.
 
 ## Tính năng chính
 - Trích xuất tự động: MST, tên công ty, ngày lập, danh sách mặt hàng, tổng tiền, thuế VAT
@@ -35,6 +35,7 @@ DEEPSEEK=your_deepseek_key_here
 DEEPSEEK_MODEL_NAME=deepseek-chat
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace_with_a_long_unique_password
+ADMIN_EMAIL=admin@gmail.com
 # Bỏ comment và điền thông tin thật nếu muốn dùng MySQL local thay SQLite:
 # MYSQL_HOST=127.0.0.1
 # MYSQL_PORT=3306
@@ -43,14 +44,15 @@ ADMIN_PASSWORD=replace_with_a_long_unique_password
 # MYSQL_DATABASE=invoice_parser
 ```
 
-Gemini được ưu tiên. xAI chỉ được gọi dự phòng sau khi các API key Gemini đều thất bại; DeepSeek được gọi cuối cùng nếu xAI cũng thất bại.
+Gemini được ưu tiên; dịch vụ dự phòng được gọi theo cấu hình khi dịch vụ trước đó thất bại.
 Các dòng `MYSQL_*` ở trên là ví dụ để chép vào `.env`; khai báo mặc định trong `invoice_parser_config.py` không tự kết nối MySQL. Cần đặt `MYSQL_HOST` và mật khẩu thực tế trong `.env` để bật kết nối MySQL local.
 
 ### Tài khoản và phân quyền
 
-- Cấu hình `ADMIN_USERNAME` và `ADMIN_PASSWORD` bằng thông tin riêng, đủ mạnh trong `.env` hoặc Streamlit Secrets. Không dùng mật khẩu mẫu ở trên. Tài khoản này được tạo/cập nhật thành admin khi ứng dụng kết nối database.
+- Cấu hình `ADMIN_USERNAME` và `ADMIN_PASSWORD` bằng thông tin riêng, đủ mạnh trong `.env` hoặc Streamlit Secrets. Không dùng mật khẩu mẫu ở trên. Tài khoản này được tạo hoặc cấp quyền quản trị khi ứng dụng kết nối database. Mật khẩu admin đã đổi trong ứng dụng sẽ được giữ lại sau khi khởi động lại; nếu admin quên mật khẩu, cập nhật `ADMIN_PASSWORD` trong cấu hình rồi khởi động lại để đặt mật khẩu mới.
 - Người dùng tự đăng ký qua giao diện sẽ luôn là tài khoản thường; mật khẩu yêu cầu tối thiểu 6 ký tự và sau đăng ký cần đăng nhập riêng. Admin quản lý toàn bộ hóa đơn và là người duy nhất được đổi trạng thái duyệt/thanh toán.
 - Form đăng ký yêu cầu địa chỉ Gmail hợp lệ (`@gmail.com`) cùng họ tên; người dùng có thể đăng nhập bằng Gmail hoặc tên đăng nhập cũ.
+- Người dùng đã đăng nhập có thể đổi mật khẩu trong menu tài khoản; cần xác nhận mật khẩu hiện tại và mật khẩu mới tối thiểu 6 ký tự. Nếu quên mật khẩu, liên hệ quản trị viên để được hỗ trợ; ứng dụng không gửi email đặt lại mật khẩu.
 - Không có tài khoản/mật khẩu admin mặc định trong mã nguồn. Admin được tạo từ `ADMIN_USERNAME` và `ADMIN_PASSWORD` do người triển khai cấu hình. Nếu chưa cấu hình hai giá trị này thì chưa có admin bootstrap.
 - Tài khoản nằm trong bảng `users` của database được cấu hình (`data/outputs/invoices.db` khi dùng SQLite; hoặc database đích khi đặt `DATABASE_URL`/MySQL). Mật khẩu chỉ lưu dưới dạng hash PBKDF2, không lưu mật khẩu gốc.
 - Khi ứng dụng khởi động, nó tạo/migrate các bảng `users`, `invoices` và `processing_jobs` trong đúng database mà cấu hình hiện tại trỏ tới. Nếu không thấy `users` trong MySQL, kiểm tra `DATABASE_URL` hoặc các giá trị `MYSQL_*` ở cả app local và web: chúng có thể đang trỏ tới SQLite, hoặc tới một schema/database MySQL khác.
@@ -66,8 +68,9 @@ Các dòng `MYSQL_*` ở trên là ví dụ để chép vào `.env`; khai báo m
    GEMINI_API_KEY = "your_key_here"
    ADMIN_USERNAME = "admin"
    ADMIN_PASSWORD = "a-long-unique-password"
+   ADMIN_EMAIL = "admin@gmail.com"
    ```
-   Có thể dùng `XAI_API_KEY` hoặc `DEEPSEEK_API_KEY` thay cho Gemini.
+   Có thể dùng `XAI_API_KEY` hoặc `DEEPSEEK_API_KEY` làm dịch vụ dự phòng cho Gemini.
 2. SQLite và các file trong `data/` bị `.gitignore` loại khỏi Git; Cloud không nhận database hay hóa đơn trên máy local. SQLite trên ổ đĩa của Community Cloud cũng không phải nơi lưu trữ bền vững.
 3. Để giữ dữ liệu giữa các lần khởi động, tạo một MySQL database bên ngoài có thể truy cập từ Cloud và thêm các giá trị vào Secrets. Nếu muốn local và web nhìn thấy chung tài khoản/hóa đơn/trạng thái, cấu hình cả hai môi trường dùng cùng host, database/schema và cùng credentials. Nếu muốn thử nghiệm tách biệt để tránh sửa nhầm dữ liệu thật, dùng database/schema riêng cho local; không cần database riêng trên web trừ khi muốn cô lập dữ liệu:
    ```toml
@@ -110,7 +113,7 @@ Các file PDF/ảnh được lưu riêng trong `data/uploads` và `data/raw`, kh
 
 1. Tải lên và xử lý thành công một hóa đơn.
 2. Tải lại đúng tệp đó (có thể đổi tên tệp). Nếu đã có dữ liệu trích xuất gắn với SHA-256 đó, hệ thống liên kết job mới với hóa đơn cũ, ghi trạng thái **Trùng hóa đơn** và không chạy OCR lần nữa. Nếu chưa có dữ liệu cũ để liên kết, hệ thống yêu cầu chọn **Tiếp tục xử lý** hoặc **Bỏ qua hóa đơn này**.
-3. Nếu đổi tên và nội dung hóa đơn giống nhau nhưng tệp được scan/nén lại, cảnh báo sẽ dựa trên số hóa đơn, MST bên bán, ngày lập và tổng thanh toán sau khi AI trích xuất.
+3. Nếu đổi tên và nội dung hóa đơn giống nhau nhưng tệp được scan/nén lại, cảnh báo sẽ dựa trên số hóa đơn, MST bên bán, ngày lập và tổng thanh toán sau khi trích xuất.
 4. Xem các nhóm nghi trùng ở trang **Báo cáo tổng hợp**. Với dữ liệu đã có trước khi bổ sung SHA-256, cần tải lại tệp cũ hoặc nhập số hóa đơn để hệ thống đối chiếu được.
 5. Trong **Lịch sử hóa đơn**, thao tác **Xóa hóa đơn trùng** sẽ chỉ xóa bản trích xuất khớp cùng MST bên bán, số hóa đơn, ngày lập và tổng thanh toán (sai số tối đa 1 đồng), cùng các job thành công/lỗi tương ứng. Bản gốc xử lý sớm nhất được giữ lại; các trường hợp cùng số hóa đơn nhưng khác ngày hoặc số tiền không bị xóa. Cần xác nhận trước khi xóa.
 
@@ -137,7 +140,7 @@ Xem chi tiết trong `docs/architecture_diagram.png`
 
 ## Công nghệ sử dụng
 - **OCR**: PaddleOCR (detection), VietOCR (recognition)
-- **Structuring**: Gemini, xAI và DeepSeek API + Pydantic
+- **Structuring**: Gemini, dịch vụ dự phòng, DeepSeek API + Pydantic
 - **UI**: Streamlit
 - **Lưu trữ**: Excel (openpyxl) / SQLite (SQLAlchemy)
 

@@ -1,10 +1,10 @@
 import re
-from datetime import datetime
 from pathlib import Path
 import streamlit as st
 
 from src.storage.db_handler import (
     authenticate_user,
+    change_user_password,
     get_auth_configuration,
     initialize_database,
     register_user,
@@ -22,29 +22,39 @@ def _render_html(html_str: str) -> None:
     st.markdown(cleaned, unsafe_allow_html=True)
 
 
-@st.dialog("Khôi phục mật khẩu")
-def _show_forgot_password_dialog():
-    st.markdown("### 🔑 Đặt lại mật khẩu tài khoản")
-    st.info(
-        "Vì lý do bảo mật dữ liệu tài chính doanh nghiệp, việc cấp lại mật khẩu "
-        "được thực hiện bởi Quản trị viên hệ thống."
-    )
-    st.markdown("""
-    **Cách thức liên hệ hỗ trợ:**
-    - 📧 **Email IT/Admin:** `admin@invoiceai.com`
-    - 📞 **Hotline:** 1900 8888 (08:00 - 18:00 các ngày trong tuần)
-    - 🏢 **Phòng Kế toán & Quản trị hệ thống InvoiceAI**
-    
-    *Vui lòng cung cấp Email đã đăng ký để được cấp mã kích hoạt lại tài khoản trong vòng 15 phút.*
-    """)
-    if st.button("Đã hiểu và Đóng", use_container_width=True, type="primary"):
-        st.query_params.pop("action", None)
-        st.rerun()
+@st.dialog("Đổi mật khẩu")
+def _show_change_password_dialog(user_id: int) -> None:
+    with st.form("change_password_form", clear_on_submit=True):
+        current_password = st.text_input(
+            "Mật khẩu hiện tại", type="password", key="change_current_password"
+        )
+        new_password = st.text_input(
+            "Mật khẩu mới", type="password", key="change_new_password"
+        )
+        confirm_password = st.text_input(
+            "Xác nhận mật khẩu mới", type="password", key="change_confirm_password"
+        )
+        submitted = st.form_submit_button(
+            "Cập nhật mật khẩu", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+    if not current_password:
+        st.error("Vui lòng nhập mật khẩu hiện tại.")
+    elif len(new_password) < 6:
+        st.error("Mật khẩu mới cần có ít nhất 6 ký tự.")
+    elif new_password != confirm_password:
+        st.error("Mật khẩu xác nhận không khớp.")
+    elif not change_user_password(user_id, current_password, new_password):
+        st.error("Mật khẩu hiện tại không chính xác.")
+    else:
+        st.success("Đổi mật khẩu thành công.")
 
 
 @st.dialog("Điều khoản sử dụng & Chính sách bảo mật")
 def _show_terms_dialog():
-    st.markdown("### 📋 Điều khoản sử dụng & Chính sách bảo mật InvoiceAI")
+    st.markdown("### 📋 Điều khoản sử dụng & Chính sách bảo mật Invoice Pro")
     st.markdown("""
     **1. Cam kết bảo mật dữ liệu (SSL 256-bit):**
     Mọi thông tin hóa đơn, chứng từ và dữ liệu doanh nghiệp tải lên hệ thống đều được 
@@ -52,7 +62,7 @@ def _show_terms_dialog():
 
     **2. Quyền sở hữu dữ liệu:**
     Doanh nghiệp toàn quyền sở hữu các dữ liệu hóa đơn, báo cáo tài chính và lịch sử xử lý. 
-    InvoiceAI cam kết không chia sẻ dữ liệu cho bên thứ ba.
+    Invoice Pro cam kết không chia sẻ dữ liệu cho bên thứ ba.
 
     **3. Trách nhiệm người dùng:**
     Người dùng có trách nhiệm bảo mật thông tin đăng nhập và thông báo ngay cho Quản trị viên 
@@ -69,9 +79,9 @@ def _render_hero_column():
         <!-- Logo góc trên bên trái -->
         <div class="hero-top-logo">
             <div class="hero-logo-box">
-                <img src="{logo_data_uri()}" alt="InvoiceAI" />
+                <img src="{logo_data_uri()}" alt="Invoice Pro" />
             </div>
-            <span class="hero-logo-title">InvoiceAI</span>
+            <span class="hero-logo-title">Invoice Pro</span>
         </div>
 
         <!-- Khối nội dung chính giữa -->
@@ -93,9 +103,9 @@ def _render_hero_column():
             <div class="hero-feature-list">
                 <div class="hero-feature-row">
                     <div class="hero-feature-squircle">
-                        <img src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23A5B4FC' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='13 2 3 14 12 14 11 22 21 10 12 10 13 2'/%3E%3C/svg%3E" width="18" height="18" alt="AI" />
+                        <img src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23A5B4FC' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='13 2 3 14 12 14 11 22 21 10 12 10 13 2'/%3E%3C/svg%3E" width="18" height="18" alt="Automation" />
                     </div>
-                    <span class="hero-feature-label">Trích xuất dữ liệu bằng AI trong vài giây</span>
+                    <span class="hero-feature-label">Trích xuất dữ liệu hóa đơn trong vài giây</span>
                 </div>
 
                 <div class="hero-feature-row">
@@ -116,7 +126,7 @@ def _render_hero_column():
 
         <!-- Bản quyền góc dưới bên trái -->
         <div class="hero-bottom-copyright">
-            © 2026 InvoiceAI. Bảo lưu mọi quyền.
+            © 2026 Invoice Pro. Bảo lưu mọi quyền.
         </div>
 
         <!-- Hoa văn vòng tròn đồng tâm ở góc dưới bên phải -->
@@ -135,12 +145,6 @@ def _render_login_form():
         username = st.text_input("Email", placeholder="name@company.com", key="login_username_field")
         password = st.text_input("Mật khẩu", type="password", placeholder="Tối thiểu 8 ký tự", key="login_password_field")
         st.checkbox("Ghi nhớ đăng nhập", value=True, key="login_remember_checkbox")
-        _render_html(
-            '<div style="text-align:right; padding-top:2px;">'
-            '<a href="?action=forgot_password" target="_self" '
-            'style="color:#4F46E5; text-decoration:none; font-size:12.5px; font-weight:500;">'
-            'Quên mật khẩu?</a></div>'
-        )
         submitted = st.form_submit_button(
             "Đăng nhập →", type="primary", use_container_width=True
         )
@@ -163,7 +167,7 @@ def _render_login_form():
 
     _render_html("""
         <div class="auth-switch-box">
-            Chưa có tài khoản? <a href="?mode=register" target="_self">Đăng ký miễn phí</a>
+            Chưa có tài khoản? <a href="?mode=register" target="_self">Đăng ký ngay</a>
         </div>
     """)
 
@@ -223,9 +227,7 @@ def _render_register_form():
 
 def _render_auth_page():
     action = st.query_params.get("action")
-    if action == "forgot_password":
-        _show_forgot_password_dialog()
-    elif action in {"terms", "privacy"}:
+    if action in {"terms", "privacy"}:
         _show_terms_dialog()
 
     query_mode = st.query_params.get("mode")
@@ -268,12 +270,12 @@ def _render_auth_page():
                 else:
                     _render_register_form()
 
-                _render_html("""
-                    <div class="auth-security-ssl">
-                        <img src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/%3E%3C/svg%3E" width="13" height="13" alt="SSL" />
-                        <span>Kết nối an toàn với mã hóa SSL 256-bit</span>
-                    </div>
-                """)
+                # _render_html("""
+                #     <div class="auth-security-ssl">
+                #         <img src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/%3E%3C/svg%3E" width="13" height="13" alt="SSL" />
+                #         <span>Kết nối an toàn với mã hóa SSL 256-bit</span>
+                #     </div>
+                # """)
 
 
 def require_auth() -> dict:
@@ -313,16 +315,22 @@ def render_account_menu() -> None:
     if not user:
         return
 
+    show_password_dialog = False
     _, account_column = st.columns([10, 1])
     with account_column:
         with st.popover("👤", use_container_width=True):
             st.markdown(f"**{user.get('full_name') or user['username']}**")
             st.caption(user.get("email") or user["username"])
             st.divider()
+            if st.button("🔑 Đổi mật khẩu", use_container_width=True):
+                show_password_dialog = True
             if st.button("↪ Đăng xuất", use_container_width=True):
                 log_activity("logout", user_id=int(user["id"]))
                 st.session_state.clear()
                 st.rerun()
+
+    if show_password_dialog:
+        _show_change_password_dialog(int(user["id"]))
 
 
 def current_user() -> dict:

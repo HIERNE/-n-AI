@@ -17,10 +17,10 @@ NAV_ITEMS = [
 def _render_brand() -> None:
     st.markdown(f"""
         <div style="display:flex; align-items:center; gap:10px; padding:2px 0 10px; border-bottom:1px solid #334155; margin-bottom:10px;">
-            <img src="{logo_data_uri()}" alt="InvoiceAI" style="width:40px; height:40px; object-fit:contain; flex-shrink:0;" />
+            <img src="{logo_data_uri()}" alt="Invoice Pro" style="width:40px; height:40px; object-fit:contain; flex-shrink:0;" />
             <div>
-                <div style="font-weight:800; font-size:15px; color:white; letter-spacing: -0.3px;">InvoiceAI <span style="font-size:9.5px; background:#312E81; color:#A5B4FC; padding:1px 5px; border-radius:99px; font-weight:600; vertical-align:middle;">PRO</span></div>
-                <div style="font-size:10.5px; color:#94A3B8; margin-top:1px;">Hệ thống AI Kiểm toán &amp; Kế toán</div>
+                <div style="font-weight:800; font-size:15px; color:white; letter-spacing: -0.3px;">Invoice Pro</div>
+                <div style="font-size:10.5px; color:#94A3B8; margin-top:1px;">Quản lý hóa đơn &amp; kế toán</div>
             </div>
         </div>
         <div style="font-size:10px; font-weight:700; letter-spacing:1px;

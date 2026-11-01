@@ -11,10 +11,10 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
-from invoice_parser_config import ADMIN_PASSWORD, ADMIN_USERNAME, DATABASE_URL
+from invoice_parser_config import ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_USERNAME, DATABASE_URL
 from src.structuring.schemas import Invoice
 
-_BOOTSTRAPPED_ADMINS: set[tuple[str, str, str]] = set()
+_BOOTSTRAPPED_ADMINS: set[tuple[str, str, str, str]] = set()
 _GMAIL_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@gmail\.com$", re.IGNORECASE)
 
 
@@ -191,6 +191,8 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
                 full_name VARCHAR(255),
                 email VARCHAR(255),
                 role VARCHAR(20) NOT NULL DEFAULT 'user',
+                password_changed_at TIMESTAMP NULL,
+                admin_bootstrap_password_hash VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
@@ -201,6 +203,14 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(255)"))
         if "email" not in user_columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(255)"))
+        if "password_changed_at" not in user_columns:
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP NULL"
+            ))
+        if "admin_bootstrap_password_hash" not in user_columns:
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN admin_bootstrap_password_hash VARCHAR(255)"
+            ))
 
     if not bootstrap_admin:
         return
@@ -220,29 +230,65 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
         str(engine.url),
         username,
         hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).hexdigest(),
+        ADMIN_EMAIL.strip().casefold(),
     )
+    configured_admin_hash = _password_hash(ADMIN_PASSWORD)
     with engine.begin() as conn:
         existing = conn.execute(
-            text("SELECT id FROM users WHERE username = :username"),
+            text("""
+                SELECT id, password_changed_at, admin_bootstrap_password_hash
+                FROM users
+                WHERE username = :username
+            """),
             {"username": username},
         ).first()
         if existing:
             admin_id = existing[0]
             if bootstrap_key not in _BOOTSTRAPPED_ADMINS:
-                conn.execute(text("""
-                    UPDATE users SET password_hash = :password_hash, role = 'admin'
-                    WHERE id = :id
-                """), {
-                    "password_hash": _password_hash(ADMIN_PASSWORD),
-                    "id": admin_id,
-                })
+                configured_password_changed = (
+                    existing[2] is not None
+                    and not _password_matches(ADMIN_PASSWORD, existing[2])
+                )
+                first_bootstrap = existing[2] is None and existing[1] is None
+                if configured_password_changed or first_bootstrap:
+                    conn.execute(text("""
+                        UPDATE users
+                        SET password_hash = :password_hash, role = 'admin',
+                            email = COALESCE(:email, email),
+                            password_changed_at = NULL,
+                            admin_bootstrap_password_hash = :admin_hash
+                        WHERE id = :id
+                    """), {
+                        "password_hash": configured_admin_hash,
+                        "admin_hash": configured_admin_hash,
+                        "email": ADMIN_EMAIL.strip().casefold() or None,
+                        "id": admin_id,
+                    })
+                else:
+                    conn.execute(text("""
+                        UPDATE users
+                        SET role = 'admin', email = COALESCE(:email, email),
+                            admin_bootstrap_password_hash = COALESCE(
+                                admin_bootstrap_password_hash, :admin_hash
+                            )
+                        WHERE id = :id
+                    """), {
+                        "admin_hash": configured_admin_hash,
+                        "email": ADMIN_EMAIL.strip().casefold() or None,
+                        "id": admin_id,
+                    })
         else:
             result = conn.execute(text("""
-                INSERT INTO users (username, password_hash, role)
-                VALUES (:username, :password_hash, 'admin')
+                INSERT INTO users (
+                    username, password_hash, admin_bootstrap_password_hash,
+                    email, role
+                )
+                VALUES (:username, :password_hash, :admin_hash, :email, 'admin')
             """), {
                 "username": username,
-                "password_hash": _password_hash(ADMIN_PASSWORD),
+                "password_hash": configured_admin_hash,
+                "admin_hash": configured_admin_hash,
+                "email": ADMIN_EMAIL.strip().casefold() or None,
             })
             admin_id = result.lastrowid
 
@@ -330,6 +376,46 @@ def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
         "email": row["email"],
         "role": row["role"],
     }
+
+
+def change_user_password(
+    user_id: int,
+    current_password: str,
+    new_password: str,
+) -> bool:
+    if len(new_password or "") < 6:
+        raise ValueError("Mật khẩu mới cần có ít nhất 6 ký tự.")
+    engine = _make_engine()
+    _ensure_auth_table(engine)
+    with engine.begin() as conn:
+        user = conn.execute(
+            text("""
+                SELECT password_hash FROM users WHERE id = :user_id
+            """),
+            {"user_id": user_id},
+        ).first()
+        if not user or not _password_matches(
+            current_password or "", user.password_hash
+        ):
+            return False
+
+        updated = conn.execute(text("""
+            UPDATE users
+            SET password_hash = :password_hash,
+                password_changed_at = CURRENT_TIMESTAMP
+            WHERE id = :user_id AND password_hash = :current_hash
+        """), {
+            "password_hash": _password_hash(new_password),
+            "user_id": user_id,
+            "current_hash": user.password_hash,
+        })
+        if updated.rowcount != 1:
+            return False
+
+    from src.logging_config import log_activity
+
+    log_activity("password_changed", user_id=user_id)
+    return True
 
 
 def get_auth_configuration() -> dict[str, bool]:
@@ -630,11 +716,11 @@ def set_invoice_payment_status(
 
 FRIENDLY_ERROR_RULES = [
     (("503", "unavailable", "overloaded", "high demand"),
-     "Mô hình AI (Gemini) đang quá tải do nhu cầu sử dụng cao, hệ thống đã tự thử lại nhưng chưa thành công"),
+     "Dịch vụ xử lý hóa đơn đang quá tải, hệ thống đã tự thử lại nhưng chưa thành công"),
     (("timeout", "timed out"),
      "Hết thời gian chờ phản hồi, có thể do kết nối mạng chậm"),
     (("validationerror", "validate"),
-     "Dữ liệu AI trả về không đúng định dạng mong đợi"),
+     "Dữ liệu trích xuất không đúng định dạng mong đợi"),
     (("poppler", "pdfinfo"),
      "Lỗi khi chuyển đổi file PDF sang ảnh"),
     (("không đọc được ảnh", "filenotfound"),

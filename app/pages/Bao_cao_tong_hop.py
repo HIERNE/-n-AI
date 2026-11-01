@@ -2,7 +2,7 @@ from pathlib import Path
 
 import streamlit as st
 st.set_page_config(
-    page_title="Báo cáo tổng hợp - InvoiceAI",
+    page_title="Báo cáo tổng hợp - Invoice Pro",
     page_icon=str(Path(__file__).resolve().parents[1] / "assets" / "invoiceai_logo.png"),
     layout="wide",
 )

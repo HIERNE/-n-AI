@@ -52,7 +52,7 @@ Text OCR:
 def _clean_json_string(raw_text: str) -> str:
     match = re.search(r"\{.*\}", raw_text, re.DOTALL)
     if not match:
-        raise ValueError("Không tìm thấy JSON hợp lệ trong phản hồi của nhà cung cấp AI")
+        raise ValueError("Không tìm thấy JSON hợp lệ trong phản hồi của dịch vụ xử lý")
     return match.group(0)
 
 

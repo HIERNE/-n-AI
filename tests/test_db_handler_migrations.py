@@ -115,6 +115,103 @@ class InvoiceDatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(legacy_history["file_name"], "Hóa đơn cũ #1")
         self.assertEqual(legacy_history["status"], "success")
 
+    def test_user_can_change_password_only_after_current_password_is_verified(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine):
+            user = db_handler.register_user(
+                "change-password@gmail.com",
+                "old-password",
+                email="change-password@gmail.com",
+            )
+            self.assertFalse(
+                db_handler.change_user_password(
+                    user["id"], "wrong-password", "new-password"
+                )
+            )
+            self.assertTrue(
+                db_handler.change_user_password(
+                    user["id"], "old-password", "new-password"
+                )
+            )
+            self.assertIsNone(
+                db_handler.authenticate_user(
+                    "change-password@gmail.com", "old-password"
+                )
+            )
+            self.assertIsNotNone(
+                db_handler.authenticate_user(
+                    "change-password@gmail.com", "new-password"
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "6 ký tự"):
+                db_handler.change_user_password(
+                    user["id"], "new-password", "short"
+                )
+
+    def test_admin_password_change_survives_database_reinitialization(self):
+        bootstrapped_admins = set()
+        with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
+            db_handler, "ADMIN_USERNAME", "password-change-admin"
+        ), patch.object(
+            db_handler, "ADMIN_PASSWORD", "configured-password"
+        ), patch.object(
+            db_handler, "_BOOTSTRAPPED_ADMINS", bootstrapped_admins
+        ):
+            db_handler.initialize_database()
+            admin = db_handler.authenticate_user(
+                "password-change-admin", "configured-password"
+            )
+            self.assertTrue(
+                db_handler.change_user_password(
+                    admin["id"], "configured-password", "changed-password"
+                )
+            )
+
+            bootstrapped_admins.clear()
+            db_handler.initialize_database()
+            self.assertIsNone(
+                db_handler.authenticate_user(
+                    "password-change-admin", "configured-password"
+                )
+            )
+            self.assertIsNotNone(
+                db_handler.authenticate_user(
+                    "password-change-admin", "changed-password"
+                )
+            )
+
+    def test_admin_password_can_be_rotated_through_bootstrap_configuration(self):
+        bootstrapped_admins = set()
+        with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
+            db_handler, "ADMIN_USERNAME", "password-rotation-admin"
+        ), patch.object(
+            db_handler, "ADMIN_PASSWORD", "initial-password"
+        ), patch.object(
+            db_handler, "_BOOTSTRAPPED_ADMINS", bootstrapped_admins
+        ):
+            db_handler.initialize_database()
+            admin = db_handler.authenticate_user(
+                "password-rotation-admin", "initial-password"
+            )
+            self.assertTrue(
+                db_handler.change_user_password(
+                    admin["id"], "initial-password", "changed-password"
+                )
+            )
+
+            bootstrapped_admins.clear()
+            with patch.object(db_handler, "ADMIN_PASSWORD", "rotated-password"):
+                db_handler.initialize_database()
+                self.assertIsNone(
+                    db_handler.authenticate_user(
+                        "password-rotation-admin", "changed-password"
+                    )
+                )
+                self.assertIsNotNone(
+                    db_handler.authenticate_user(
+                        "password-rotation-admin", "rotated-password"
+                    )
+                )
+
     def test_invoice_visibility_and_status_changes_are_role_scoped(self):
         with patch.object(db_handler, "_make_engine", return_value=self.engine):
             alice = db_handler.register_user("alice", "a-strong-password")

@@ -88,6 +88,7 @@ LLM_API_CONFIGURED = bool(GEMINI_API_KEYS or XAI_API_KEY or DEEPSEEK_API_KEY)
 # --- Account bootstrap ---
 ADMIN_USERNAME = _setting("ADMIN_USERNAME")
 ADMIN_PASSWORD = _setting("ADMIN_PASSWORD")
+ADMIN_EMAIL = _setting("ADMIN_EMAIL", "")
 
 # --- Cấu hình OCR ---
 OCR_LANG = "vi"
