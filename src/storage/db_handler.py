@@ -16,6 +16,23 @@ from src.structuring.schemas import Invoice
 
 _BOOTSTRAPPED_ADMINS: set[tuple[str, str, str, str]] = set()
 _GMAIL_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@gmail\.com$", re.IGNORECASE)
+_INVOICE_MATCH_JOINS = """
+    LEFT JOIN (
+        SELECT source_hash, user_id, MIN(id) AS invoice_id
+        FROM invoices
+        WHERE source_hash IS NOT NULL
+        GROUP BY source_hash, user_id
+    ) AS user_hash_invoice
+        ON user_hash_invoice.source_hash = j.source_hash
+       AND user_hash_invoice.user_id = j.user_id
+    LEFT JOIN (
+        SELECT source_hash, MIN(id) AS invoice_id
+        FROM invoices
+        WHERE source_hash IS NOT NULL
+        GROUP BY source_hash
+    ) AS admin_hash_invoice
+        ON admin_hash_invoice.source_hash = j.source_hash
+"""
 
 
 def _needs_tls(url) -> bool:
@@ -792,19 +809,26 @@ def get_upload_duplicate_candidates(
         rows = conn.execute(
             text(f"""
                 SELECT j.id AS job_id, j.file_name, j.source_image, j.source_hash,
-                       j.status, COALESCE(j.invoice_id, i.id) AS invoice_id,
+                       j.status,
+                       COALESCE(
+                           j.invoice_id,
+                           CASE WHEN :is_admin = 1
+                               THEN admin_hash_invoice.invoice_id
+                               ELSE user_hash_invoice.invoice_id
+                           END
+                       ) AS invoice_id,
                        i.so_hoa_don, i.ngay_lap, i.tong_thanh_toan
                 FROM processing_jobs j
-                LEFT JOIN invoices i ON i.id = COALESCE(
-                    j.invoice_id,
-                    (
-                        SELECT MIN(i2.id)
-                        FROM invoices i2
-                        WHERE j.source_hash IS NOT NULL
-                          AND i2.source_hash = j.source_hash
-                          AND (i2.user_id = j.user_id OR :is_admin = 1)
+                {_INVOICE_MATCH_JOINS}
+                LEFT JOIN invoices i
+                    ON i.id = COALESCE(
+                        j.invoice_id,
+                        CASE WHEN :is_admin = 1
+                            THEN admin_hash_invoice.invoice_id
+                            ELSE user_hash_invoice.invoice_id
+                        END
                     )
-                ) AND (i.user_id = j.user_id OR :is_admin = 1)
+                   AND (i.user_id = j.user_id OR :is_admin = 1)
                 WHERE (j.source_hash = :source_hash OR j.file_name = :file_name)
                   AND {ownership}
                   AND (
@@ -1021,16 +1045,16 @@ def get_full_history(user_id: int | None = None, is_admin: bool = False) -> list
                 END AS uploader_full_name
             FROM processing_jobs j
             LEFT JOIN users AS uploader ON uploader.id = j.user_id
-            LEFT JOIN invoices i ON i.id = COALESCE(
-                j.invoice_id,
-                (
-                    SELECT MIN(i2.id)
-                    FROM invoices i2
-                    WHERE j.source_hash IS NOT NULL
-                      AND i2.source_hash = j.source_hash
-                      AND (i2.user_id = j.user_id OR :is_admin = 1)
+            {_INVOICE_MATCH_JOINS}
+            LEFT JOIN invoices i
+                ON i.id = COALESCE(
+                    j.invoice_id,
+                    CASE WHEN :is_admin = 1
+                        THEN admin_hash_invoice.invoice_id
+                        ELSE user_hash_invoice.invoice_id
+                    END
                 )
-            ) AND (i.user_id = j.user_id OR :is_admin = 1)
+               AND (i.user_id = j.user_id OR :is_admin = 1)
             WHERE {ownership}
             ORDER BY j.created_at DESC
         """), {**params, "is_admin": int(is_admin)}).mappings().fetchall()

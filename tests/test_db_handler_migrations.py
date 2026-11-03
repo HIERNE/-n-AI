@@ -319,6 +319,66 @@ class InvoiceDatabaseMigrationTests(unittest.TestCase):
         self.assertIsNone(remaining_job)
         self.assertIsNone(remaining_invoice)
 
+    def test_hash_invoice_matches_are_resolved_for_upload_and_history_queries(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine):
+            bob = db_handler.register_user("hash-bob", "a-strong-password")
+            alice = db_handler.register_user("hash-alice", "another-strong-password")
+            invoice = Invoice(
+                ma_so_thue_ban="0312345678",
+                ten_cong_ty_ban="Hóa đơn trùng hash",
+                so_hoa_don="HD-HASH",
+                ngay_lap="2026-10-10",
+                tong_tien_hang=1000,
+                thue_suat_vat="10%",
+                tien_thue_vat=100,
+                tong_thanh_toan=1100,
+            )
+            bob_invoice_id = db_handler.save_invoice_to_db(
+                invoice, "bob.pdf", source_hash="shared-hash", user_id=bob["id"]
+            )
+            alice_invoice_id = db_handler.save_invoice_to_db(
+                invoice, "alice.pdf", source_hash="shared-hash", user_id=alice["id"]
+            )
+            bob_job_id = db_handler.create_job(
+                "bob-copy.pdf", source_hash="shared-hash", user_id=bob["id"]
+            )
+            alice_job_id = db_handler.create_job(
+                "alice-copy.pdf", source_hash="shared-hash", user_id=alice["id"]
+            )
+
+            bob_candidates = db_handler.get_upload_duplicate_candidates(
+                "shared-hash", "bob-copy.pdf", user_id=bob["id"]
+            )
+            alice_candidates = db_handler.get_upload_duplicate_candidates(
+                "shared-hash", "alice-copy.pdf", user_id=alice["id"]
+            )
+            admin_candidates = db_handler.get_upload_duplicate_candidates(
+                "shared-hash", "bob-copy.pdf", is_admin=True
+            )
+            alice_history = db_handler.get_full_history(user_id=alice["id"])
+            admin_history = db_handler.get_full_history(is_admin=True)
+
+        self.assertEqual(bob_candidates[0]["invoice_id"], bob_invoice_id)
+        self.assertEqual(alice_candidates[0]["invoice_id"], alice_invoice_id)
+        self.assertEqual(
+            {row["job_id"]: row["invoice_id"] for row in admin_candidates},
+            {bob_job_id: bob_invoice_id, alice_job_id: bob_invoice_id},
+        )
+        self.assertEqual(
+            next(row for row in alice_history if row["job_id"] == alice_job_id)[
+                "so_hoa_don"
+            ],
+            "HD-HASH",
+        )
+        self.assertEqual(
+            {
+                row["job_id"]: row["so_hoa_don"]
+                for row in admin_history
+                if row["job_id"] in {bob_job_id, alice_job_id}
+            },
+            {bob_job_id: "HD-HASH", alice_job_id: "HD-HASH"},
+        )
+
     def test_user_cannot_delete_another_users_history(self):
         with patch.object(db_handler, "_make_engine", return_value=self.engine):
             alice = db_handler.register_user("alice-delete", "a-strong-password")
