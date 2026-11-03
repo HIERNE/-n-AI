@@ -121,9 +121,10 @@ with tab_overview:
             return ((series.iloc[-1] - series.iloc[-2]) / series.iloc[-2]) * 100
 
         def sparkline(series: pd.Series, color: str):
+            red, green, blue = (int(color[index:index + 2], 16) for index in (1, 3, 5))
             fig = go.Figure(go.Scatter(
                 y=series, mode="lines", line=dict(color=color, width=2.2),
-                fill="tozeroy", fillcolor=color + "22",
+                fill="tozeroy", fillcolor=f"rgba({red}, {green}, {blue}, 0.13)",
             ))
             fig.update_layout(
                 height=42, margin=dict(l=0, r=0, t=2, b=0),
