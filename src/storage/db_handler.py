@@ -4,6 +4,7 @@ import hmac
 import os
 import re
 import secrets
+from threading import Lock
 from functools import lru_cache
 from typing import Any
 
@@ -15,6 +16,8 @@ from invoice_parser_config import ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_USERNAME, D
 from src.structuring.schemas import Invoice
 
 _BOOTSTRAPPED_ADMINS: set[tuple[str, str, str, str]] = set()
+_BACKFILLED_DATABASES: set[str] = set()
+_BACKFILL_LOCK = Lock()
 _GMAIL_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@gmail\.com$", re.IGNORECASE)
 _INVOICE_MATCH_JOINS = """
     LEFT JOIN (
@@ -577,13 +580,21 @@ def get_confirmed_invoices(user_id: int | None = None, is_admin: bool = False) -
     return _get_invoices("confirmed", user_id=user_id, is_admin=is_admin)
 
 
-def get_invoice_count(user_id: int | None = None, is_admin: bool = False) -> int:
+def get_invoice_count(
+    user_id: int | None = None,
+    is_admin: bool = False,
+    accounting_status: str | None = None,
+) -> int:
     engine = _make_engine()
     _ensure_table(engine)
     ownership, params = _ownership_filter(user_id, is_admin)
+    status_filter = ""
+    if accounting_status is not None:
+        status_filter = " AND accounting_status = :accounting_status"
+        params["accounting_status"] = accounting_status
     with engine.begin() as conn:
         return int(conn.execute(
-            text(f"SELECT COUNT(*) FROM invoices WHERE {ownership}"), params
+            text(f"SELECT COUNT(*) FROM invoices WHERE {ownership}{status_filter}"), params
         ).scalar_one())
 
 
@@ -925,7 +936,7 @@ def mark_job_failed(
 
 def get_job_counts(user_id: int | None = None, is_admin: bool = False) -> dict:
     """Đếm số job theo từng trạng thái trong phạm vi tài khoản."""
-    backfill_jobs_from_invoices()
+    _backfill_jobs_once()
     engine = _make_engine()
     _ensure_jobs_table(engine)
     ownership, params = _ownership_filter(user_id, is_admin)
@@ -1014,7 +1025,7 @@ def get_all_jobs(user_id: int | None = None, is_admin: bool = False) -> list[dic
 def get_full_history(user_id: int | None = None, is_admin: bool = False) -> list[dict]:
     """Kết hợp processing_jobs với invoices -> dùng cho trang Lịch sử hóa đơn,
     hiển thị đúng trạng thái thật (success/processing/failed), không gắn cứng."""
-    backfill_jobs_from_invoices()
+    _backfill_jobs_once()
     engine = _make_engine()
     _ensure_table(engine)
     _ensure_jobs_table(engine)
@@ -1324,41 +1335,40 @@ def backfill_jobs_from_invoices() -> int:
     Bỏ qua các invoice đã có job liên kết (an toàn khi chạy lại nhiều lần).
     """
     engine = _make_engine()
-    _ensure_table(engine)
     _ensure_jobs_table(engine)
 
     with engine.begin() as conn:
-        already_linked = {
-            row[0] for row in conn.execute(
-                text("SELECT invoice_id FROM processing_jobs WHERE invoice_id IS NOT NULL")
-            ).fetchall()
-        }
+        if engine.dialect.name == "mysql":
+            legacy_name = "COALESCE(source_image, CONCAT('Hóa đơn cũ #', id))"
+        else:
+            legacy_name = "COALESCE(source_image, 'Hóa đơn cũ #' || CAST(id AS TEXT))"
 
-        invoices = conn.execute(
-            text("SELECT id, source_image, created_at, user_id FROM invoices")
-        ).mappings().fetchall()
-
-        inserted = 0
-        for inv in invoices:
-            if inv["id"] in already_linked:
-                continue
-            conn.execute(
-                text("""
-                    INSERT INTO processing_jobs
-                        (file_name, source_image, status, invoice_id, user_id, created_at, updated_at)
-                    VALUES
-                        (:file_name, :source_image, 'success', :invoice_id, :user_id, :created_at, :created_at)
-                """),
-                {
-                    "file_name": inv["source_image"] or f"Hóa đơn cũ #{inv['id']}",
-                    "source_image": inv["source_image"],
-                    "invoice_id": inv["id"],
-                    "user_id": inv["user_id"],
-                    "created_at": inv["created_at"],
-                },
+        result = conn.execute(text(f"""
+            INSERT INTO processing_jobs
+                (file_name, source_image, status, invoice_id, user_id, created_at, updated_at)
+            SELECT {legacy_name}, invoices.source_image, 'success', invoices.id,
+                   invoices.user_id, invoices.created_at, invoices.created_at
+            FROM invoices
+            WHERE NOT EXISTS (
+                SELECT 1 FROM processing_jobs
+                WHERE processing_jobs.invoice_id = invoices.id
             )
-            inserted += 1
+        """))
+        return max(result.rowcount or 0, 0)
 
+
+def _backfill_jobs_once() -> int:
+    """Migrate legacy invoice history once per database per app process."""
+    engine = _make_engine()
+    database_key = engine.url.render_as_string(hide_password=True)
+    if database_key in _BACKFILLED_DATABASES:
+        return 0
+
+    with _BACKFILL_LOCK:
+        if database_key in _BACKFILLED_DATABASES:
+            return 0
+        inserted = backfill_jobs_from_invoices()
+        _BACKFILLED_DATABASES.add(database_key)
         return inserted
 __all__ = [
     "initialize_database", "save_invoice_to_db", "get_processed_image_names", "get_all_invoices",
