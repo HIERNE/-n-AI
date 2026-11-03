@@ -4,7 +4,7 @@ import hmac
 import os
 import re
 import secrets
-from threading import Lock
+from threading import Lock, RLock
 from functools import lru_cache
 from typing import Any
 
@@ -18,6 +18,8 @@ from src.structuring.schemas import Invoice
 _BOOTSTRAPPED_ADMINS: set[tuple[str, str, str, str]] = set()
 _BACKFILLED_DATABASES: set[str] = set()
 _BACKFILL_LOCK = Lock()
+_INITIALIZED_ENGINES: set[Any] = set()
+_SCHEMA_INITIALIZATION_LOCK = RLock()
 _GMAIL_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@gmail\.com$", re.IGNORECASE)
 _INVOICE_MATCH_JOINS = """
     LEFT JOIN (
@@ -79,7 +81,14 @@ def _id_column(engine) -> str:
     return "id INTEGER NOT NULL AUTO_INCREMENT, PRIMARY KEY (id)"
 
 
+def _schema_is_initialized(engine) -> bool:
+    with _SCHEMA_INITIALIZATION_LOCK:
+        return engine in _INITIALIZED_ENGINES
+
+
 def _ensure_table(engine, bootstrap_admin: bool = True) -> None:
+    if _schema_is_initialized(engine):
+        return
     id_column = _id_column(engine)
     with engine.begin() as conn:
         conn.execute(text(f"""
@@ -134,6 +143,8 @@ def _ensure_table(engine, bootstrap_admin: bool = True) -> None:
 
 
 def _ensure_jobs_table(engine, bootstrap_admin: bool = True) -> None:
+    if _schema_is_initialized(engine):
+        return
     _ensure_table(engine, bootstrap_admin=bootstrap_admin)
     id_column = _id_column(engine)
     with engine.begin() as conn:
@@ -180,7 +191,11 @@ def _ensure_jobs_table(engine, bootstrap_admin: bool = True) -> None:
 
 def initialize_database() -> None:
     """Create and migrate the application schema before serving requests."""
-    _ensure_jobs_table(_make_engine())
+    engine = _make_engine()
+    with _SCHEMA_INITIALIZATION_LOCK:
+        _INITIALIZED_ENGINES.discard(engine)
+        _ensure_jobs_table(engine)
+        _INITIALIZED_ENGINES.add(engine)
 
 
 def _password_hash(password: str) -> str:
@@ -203,6 +218,8 @@ def _password_matches(password: str, stored_hash: str) -> bool:
 
 
 def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
+    if _schema_is_initialized(engine):
+        return
     id_column = _id_column(engine)
     with engine.begin() as conn:
         conn.execute(text(f"""

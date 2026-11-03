@@ -31,7 +31,7 @@ IS_ADMIN = user["role"] == "admin"
 from src.preprocessing.pdf_converter import pdf_to_images
 from src.pipeline import process_invoice_with_job_tracking
 from src.storage.db_handler import (
-    get_jobs_by_ids, get_job_counts, get_invoice_count, get_confirmed_invoices, create_job,
+    get_jobs_by_ids, get_job_counts, get_invoice_count, create_job,
     get_upload_duplicate_candidates, mark_job_duplicate, mark_job_failed,
 )
 
@@ -112,8 +112,12 @@ if not LLM_API_CONFIGURED:
 # --- Thẻ số liệu tổng quan (Metric Grid chuẩn CSS) ---
 counts = get_job_counts(user_id=USER_ID, is_admin=IS_ADMIN)
 total_invoices_count = get_invoice_count(user_id=USER_ID, is_admin=IS_ADMIN)
+confirmed_count = get_invoice_count(
+    user_id=USER_ID,
+    is_admin=IS_ADMIN,
+    accounting_status="confirmed",
+)
 success_count = counts["success"]
-confirmed_count = len(get_confirmed_invoices(user_id=USER_ID, is_admin=IS_ADMIN))
 processing_count = counts["processing"]
 failed_count = counts["failed"]
 

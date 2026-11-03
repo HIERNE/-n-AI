@@ -82,6 +82,18 @@ class InvoiceDatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(admin["role"], "admin")
         password_hash.assert_not_called()
 
+    def test_initialized_database_skips_repeated_schema_inspection(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
+            db_handler, "ADMIN_USERNAME", None
+        ), patch.object(db_handler, "ADMIN_PASSWORD", None):
+            db_handler.initialize_database()
+            with patch.object(
+                db_handler, "inspect", side_effect=AssertionError("unexpected schema inspection")
+            ):
+                count = db_handler.get_invoice_count()
+
+        self.assertEqual(count, 0)
+
     def test_old_schema_is_migrated_for_invoice_queries_and_uploads(self):
         with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
             db_handler, "ADMIN_USERNAME", "legacy-admin"
