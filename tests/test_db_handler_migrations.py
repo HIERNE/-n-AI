@@ -67,6 +67,21 @@ class InvoiceDatabaseMigrationTests(unittest.TestCase):
         self.assertTrue({"users", "invoices", "processing_jobs"}.issubset(tables))
         self.assertEqual(admin["role"], "admin")
 
+    def test_authentication_does_not_rehash_unchanged_bootstrap_admin(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
+            db_handler, "ADMIN_USERNAME", "hash-cache-admin"
+        ), patch.object(
+            db_handler, "ADMIN_PASSWORD", "a-very-strong-password"
+        ):
+            db_handler.initialize_database()
+            with patch.object(db_handler, "_password_hash") as password_hash:
+                admin = db_handler.authenticate_user(
+                    "hash-cache-admin", "a-very-strong-password"
+                )
+
+        self.assertEqual(admin["role"], "admin")
+        password_hash.assert_not_called()
+
     def test_old_schema_is_migrated_for_invoice_queries_and_uploads(self):
         with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
             db_handler, "ADMIN_USERNAME", "legacy-admin"

@@ -105,7 +105,7 @@ def _ensure_table(engine, bootstrap_admin: bool = True) -> None:
             )
         """))
 
-        columns = {column["name"] for column in inspect(engine).get_columns("invoices")}
+        columns = {column["name"] for column in inspect(conn).get_columns("invoices")}
         if "accounting_status" not in columns:
             conn.execute(text(
                 "ALTER TABLE invoices ADD COLUMN accounting_status "
@@ -150,7 +150,9 @@ def _ensure_jobs_table(engine, bootstrap_admin: bool = True) -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        columns = {column["name"] for column in inspect(engine).get_columns("processing_jobs")}
+        columns = {
+            column["name"] for column in inspect(conn).get_columns("processing_jobs")
+        }
         if "source_hash" not in columns:
             conn.execute(text(
                 "ALTER TABLE processing_jobs ADD COLUMN source_hash VARCHAR(64)"
@@ -216,9 +218,7 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        user_columns = {
-            column["name"] for column in inspect(engine).get_columns("users")
-        }
+        user_columns = {column["name"] for column in inspect(conn).get_columns("users")}
         if "full_name" not in user_columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(255)"))
         if "email" not in user_columns:
@@ -252,7 +252,6 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
         hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).hexdigest(),
         ADMIN_EMAIL.strip().casefold(),
     )
-    configured_admin_hash = _password_hash(ADMIN_PASSWORD)
     with engine.begin() as conn:
         existing = conn.execute(
             text("""
@@ -271,6 +270,7 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
                 )
                 first_bootstrap = existing[2] is None and existing[1] is None
                 if configured_password_changed or first_bootstrap:
+                    configured_admin_hash = _password_hash(ADMIN_PASSWORD)
                     conn.execute(text("""
                         UPDATE users
                         SET password_hash = :password_hash, role = 'admin',
@@ -285,6 +285,9 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
                         "id": admin_id,
                     })
                 else:
+                    configured_admin_hash = (
+                        _password_hash(ADMIN_PASSWORD) if existing[2] is None else None
+                    )
                     conn.execute(text("""
                         UPDATE users
                         SET role = 'admin', email = COALESCE(:email, email),
@@ -298,6 +301,7 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
                         "id": admin_id,
                     })
         else:
+            configured_admin_hash = _password_hash(ADMIN_PASSWORD)
             result = conn.execute(text("""
                 INSERT INTO users (
                     username, password_hash, admin_bootstrap_password_hash,
@@ -312,10 +316,11 @@ def _ensure_auth_table(engine, bootstrap_admin: bool = True) -> None:
             })
             admin_id = result.lastrowid
 
-        tables = set(inspect(engine).get_table_names())
+        inspector = inspect(conn)
+        tables = set(inspector.get_table_names())
         for table in {"invoices", "processing_jobs"} & tables:
             columns = {
-                column["name"] for column in inspect(engine).get_columns(table)
+                column["name"] for column in inspector.get_columns(table)
             }
             if "user_id" in columns:
                 conn.execute(text(
