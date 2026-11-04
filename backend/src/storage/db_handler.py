@@ -398,6 +398,10 @@ def register_user(
 
 
 def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
+    login_name = (username or "").strip()
+    if not login_name:
+        return None
+
     engine = _make_engine()
     _ensure_auth_table(engine)
     with engine.begin() as conn:
@@ -405,11 +409,16 @@ def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
             text("""
                 SELECT id, username, password_hash, role, full_name, email
                 FROM users
-                WHERE LOWER(username) = :username OR LOWER(email) = :username
+                WHERE LOWER(username) = :normalized
+                   OR LOWER(email) = :normalized
             """),
-            {"username": (username or "").strip().casefold()},
+            {"normalized": login_name.casefold()},
         ).mappings().first()
-    if not row or not _password_matches(password or "", row["password_hash"]):
+    if (
+        not row
+        or login_name not in {row["username"], row["email"]}
+        or not _password_matches(password or "", row["password_hash"])
+    ):
         return None
     return {
         "id": row["id"],
@@ -418,6 +427,21 @@ def authenticate_user(username: str, password: str) -> dict[str, Any] | None:
         "email": row["email"],
         "role": row["role"],
     }
+
+
+def get_user_by_id(user_id: int) -> dict[str, Any] | None:
+    engine = _make_engine()
+    _ensure_auth_table(engine)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("""
+                SELECT id, username, role, full_name, email
+                FROM users
+                WHERE id = :user_id
+            """),
+            {"user_id": user_id},
+        ).mappings().first()
+    return dict(row) if row else None
 
 
 def change_user_password(

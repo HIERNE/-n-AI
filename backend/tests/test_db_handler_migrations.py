@@ -82,6 +82,22 @@ class InvoiceDatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(admin["role"], "admin")
         password_hash.assert_not_called()
 
+    def test_user_lookup_returns_only_public_account_fields(self):
+        with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
+            db_handler, "ADMIN_USERNAME", None
+        ), patch.object(db_handler, "ADMIN_PASSWORD", None):
+            user = db_handler.register_user(
+                "person@gmail.com",
+                "test-password",
+                full_name="Invoice User",
+                email="person@gmail.com",
+            )
+            result = db_handler.get_user_by_id(user["id"])
+
+        self.assertEqual(result["id"], user["id"])
+        self.assertEqual(result["username"], "person@gmail.com")
+        self.assertNotIn("password_hash", result)
+
     def test_initialized_database_skips_repeated_schema_inspection(self):
         with patch.object(db_handler, "_make_engine", return_value=self.engine), patch.object(
             db_handler, "ADMIN_USERNAME", None

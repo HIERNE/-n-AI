@@ -33,11 +33,17 @@ def _normalize_image_paths(image_paths: str | Path | list[str] | tuple[str, ...]
     return paths
 
 
-def extract_invoice(image_paths: str | Path | list[str] | tuple[str, ...], progress_callback=None):
+def extract_invoice(
+    image_paths: str | Path | list[str] | tuple[str, ...],
+    progress_callback=None,
+    stage_callback=None,
+):
     """OCR every page in order and extract one invoice from the combined text."""
     paths = _normalize_image_paths(image_paths)
     page_texts = []
     total_pages = len(paths)
+    if stage_callback:
+        stage_callback(2, "Đang nhận dạng chữ trên hóa đơn (OCR).")
     for page_number, image_path in enumerate(paths, start=1):
         if progress_callback:
             progress_callback(page_number, total_pages)
@@ -45,6 +51,8 @@ def extract_invoice(image_paths: str | Path | list[str] | tuple[str, ...], progr
         page_text = "\n".join(result["text"] for result in ocr_results)
         page_texts.append(f"=== TRANG {page_number}/{total_pages} ===\n{page_text}")
 
+    if stage_callback:
+        stage_callback(3, "Đang trích xuất thông tin và lưu kết quả.")
     invoice = extract_invoice_data("\n\n".join(page_texts))
     return invoice
 
@@ -71,6 +79,7 @@ def process_invoice_with_job_tracking(
     user_id: int | None = None,
     source_image: str | Path | None = None,
     progress_callback=None,
+    stage_callback=None,
 ):
     """
     Giống process_invoice() nhưng ghi lại trạng thái job bền vững vào DB
@@ -101,7 +110,11 @@ def process_invoice_with_job_tracking(
         reset_job_to_processing(job_id, user_id=user_id)
 
     try:
-        invoice = extract_invoice(image_paths, progress_callback=progress_callback)
+        invoice = extract_invoice(
+            image_paths,
+            progress_callback=progress_callback,
+            stage_callback=stage_callback,
+        )
         duplicate_candidate = invoice.model_dump()
         duplicate_groups = find_duplicate_groups([
             *get_all_invoices(user_id=user_id, is_admin=user_id is None),

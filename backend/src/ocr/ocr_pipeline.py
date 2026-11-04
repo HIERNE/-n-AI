@@ -21,6 +21,7 @@ def _get_ocr_engines():
     if _detector_engine is None or _recognizer is None:
         with _ENGINE_LOCK:
             if _detector_engine is None or _recognizer is None:
+                import torch  # Load PyTorch DLLs before importing PaddleOCR.
                 from paddleocr import PaddleOCR
                 from vietocr.tool.config import Cfg
                 from vietocr.tool.predictor import Predictor

@@ -41,7 +41,7 @@ def _setting(name: str, default=None):
     return value if value is not None else default
 
 # --- Đường dẫn gốc dự án ---
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 
 # --- Đường dẫn dữ liệu ---
 DATA_DIR = BASE_DIR / "data"
@@ -97,17 +97,17 @@ USE_GPU = False  # Đặt True nếu máy có GPU hỗ trợ CUDA
 # --- Cấu hình database ---
 DB_PATH = OUTPUT_DIR / "invoices.db"
 
-# MYSQL_HOST = _setting("MYSQL_HOST")
-# MYSQL_PORT = int(_setting("MYSQL_PORT", "3306"))
-# MYSQL_USER = _setting("MYSQL_USER", "root")
-# MYSQL_PASSWORD = _setting("MYSQL_PASSWORD", "")
-# MYSQL_DATABASE = _setting("MYSQL_DATABASE", "invoice_parser")
-
 MYSQL_HOST = _setting("MYSQL_HOST")
-MYSQL_PORT = int(_setting("MYSQL_PORT", "4000"))
+MYSQL_PORT = int(_setting("MYSQL_PORT", "3306"))
 MYSQL_USER = _setting("MYSQL_USER", "root")
 MYSQL_PASSWORD = _setting("MYSQL_PASSWORD", "")
-MYSQL_DATABASE = _setting("MYSQL_DATABASE", "invoice_parser_host")
+MYSQL_DATABASE = _setting("MYSQL_DATABASE", "invoice_parser")
+
+# MYSQL_HOST = _setting("MYSQL_HOST")
+# MYSQL_PORT = int(_setting("MYSQL_PORT", "4000"))
+# MYSQL_USER = _setting("MYSQL_USER", "root")
+# MYSQL_PASSWORD = _setting("MYSQL_PASSWORD", "")
+# MYSQL_DATABASE = _setting("MYSQL_DATABASE", "invoice_parser_host")
 
 DATABASE_URL = _setting("DATABASE_URL")
 if not DATABASE_URL:

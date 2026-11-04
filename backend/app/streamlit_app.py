@@ -11,10 +11,10 @@ st.set_page_config(
     layout="wide",
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) in sys.path:
-    sys.path.remove(str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT))
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) in sys.path:
+    sys.path.remove(str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR))
 
 import invoice_parser_config as config
 

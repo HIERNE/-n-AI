@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 _APP_LOGGER_NAME = "smart_invoice_parser"
-_LOG_DIRECTORY = Path(__file__).resolve().parents[1] / "logs"
+_LOG_DIRECTORY = Path(__file__).resolve().parents[2] / "logs"
 
 
 def _get_file_logger(name: str, file_name: str) -> logging.Logger:
