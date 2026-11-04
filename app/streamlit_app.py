@@ -29,7 +29,6 @@ USER_ID = int(user["id"])
 IS_ADMIN = user["role"] == "admin"
 
 from src.preprocessing.pdf_converter import pdf_to_images
-from src.pipeline import process_invoice_with_job_tracking
 from src.storage.db_handler import (
     get_jobs_by_ids, get_job_counts, get_invoice_count, create_job,
     get_upload_duplicate_candidates, mark_job_duplicate, mark_job_failed,
@@ -262,6 +261,8 @@ for uploaded_file in uploaded_files or []:
         def report_page_progress(page_number: int, total_pages: int) -> None:
             progress.write(f"🔍 Đang OCR trang {page_number}/{total_pages}...")
 
+        from src.pipeline import process_invoice_with_job_tracking
+
         result = process_invoice_with_job_tracking(
             [str(image_path) for image_path in image_paths],
             file_name=upload_name,
@@ -340,6 +341,8 @@ else:
                         try:
                             with st.spinner("Đang thực hiện lại quy trình nhận dạng & xử lý..."):
                                 image_paths = prepare_image_paths(source_path)
+                                from src.pipeline import process_invoice_with_job_tracking
+
                                 retry_result = process_invoice_with_job_tracking(
                                     [str(image_path) for image_path in image_paths],
                                     file_name=job["file_name"],
