@@ -1,8 +1,10 @@
 {
+  "homepage": "https://invoicepro.id.vn",
+  "scripts": {
+    "predeploy": "npm --prefix frontend run build",
+    "deploy": "gh-pages -d frontend/dist"
+  },
   "devDependencies": {
-    "gh-pages": "^6.3.0",
-    "homepage": "https://invoicepro.id.vn"
-
+    "gh-pages": "^6.3.0"
   }
-  
 }
