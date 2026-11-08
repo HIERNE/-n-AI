@@ -54,3 +54,21 @@ export function invoiceItems(invoice: Invoice): InvoiceItem[] {
   }
   return []
 }
+
+export function getInvoiceMonthYear(invoice: Invoice): { month: number; year: number } | null {
+  const raw = String(invoice.ngay_lap || invoice.created_at || '').trim()
+  if (!raw) return null
+  const vnMatch = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/)
+  if (vnMatch) {
+    return { month: Number(vnMatch[2]), year: Number(vnMatch[3]) }
+  }
+  const isoMatch = raw.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/)
+  if (isoMatch) {
+    return { month: Number(isoMatch[2]), year: Number(isoMatch[1]) }
+  }
+  const d = new Date(raw)
+  if (!Number.isNaN(d.getTime())) {
+    return { month: d.getMonth() + 1, year: d.getFullYear() }
+  }
+  return null
+}

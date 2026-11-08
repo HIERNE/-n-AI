@@ -28,6 +28,10 @@ from app.components.auth import render_account_menu, require_auth
 from app.components.sidebar_nav import render_sidebar
 
 user = require_auth()
+if user["role"] != "admin":
+    st.error("Chỉ quản trị viên mới được sử dụng chức năng này.")
+    st.stop()
+
 USER_ID = int(user["id"])
 IS_ADMIN = user["role"] == "admin"
 render_sidebar("report")

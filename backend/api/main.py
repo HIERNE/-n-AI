@@ -805,12 +805,12 @@ def update_payment_status(
 @app.get("/api/reports")
 def reports(request: Request):
     user = _current_user(request)
+    _require_admin(user)
     user_id = user["id"]
-    is_admin = user["role"] == "admin"
     return {
-        "invoices": get_all_invoices(user_id=user_id, is_admin=is_admin),
+        "invoices": get_all_invoices(user_id=user_id, is_admin=True),
         "recent_jobs": get_recent_jobs(
-            limit=100, user_id=user_id, is_admin=is_admin
+            limit=100, user_id=user_id, is_admin=True
         ),
     }
 
@@ -823,48 +823,174 @@ def accounting(request: Request):
 
 
 @app.get("/api/accounting/export")
-def accounting_export(request: Request, payment_status: str = "all"):
+def accounting_export(
+    request: Request,
+    payment_status: str = "all",
+    month: int | None = None,
+    year: int | None = None,
+):
+    from datetime import datetime
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
     user = _current_user(request)
     _require_admin(user)
     if payment_status not in {"all", "paid", "unpaid"}:
         raise HTTPException(status_code=400, detail="Bộ lọc thanh toán không hợp lệ.")
+
     rows = get_confirmed_invoices(is_admin=True)
+
+    def _extract_my(row: dict) -> tuple[int | None, int | None]:
+        raw = str(row.get("ngay_lap") or row.get("created_at") or "").strip()
+        if not raw:
+            return None, None
+        m_vn = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})", raw)
+        if m_vn:
+            return int(m_vn.group(2)), int(m_vn.group(3))
+        m_iso = re.match(r"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})", raw)
+        if m_iso:
+            return int(m_iso.group(2)), int(m_iso.group(1))
+        return None, None
+
     if payment_status != "all":
         rows = [
             row for row in rows
             if row.get("payment_status", "unpaid") == payment_status
         ]
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill
+
+    if year is not None and year > 0:
+        rows = [r for r in rows if _extract_my(r)[1] == year]
+
+    if month is not None and 1 <= month <= 12:
+        rows = [r for r in rows if _extract_my(r)[0] == month]
+
+    period_label = "TẤT CẢ CÁC KỲ"
+    if month and year:
+        period_label = f"THÁNG {month:02d}/{year}"
+        filename = f"hach_toan_Thang_{month:02d}_{year}.xlsx"
+    elif year:
+        period_label = f"NĂM {year}"
+        filename = f"hach_toan_Nam_{year}.xlsx"
+    elif month:
+        period_label = f"THÁNG {month:02d}"
+        filename = f"hach_toan_Thang_{month:02d}.xlsx"
+    else:
+        filename = "hach_toan_toan_bo.xlsx"
 
     workbook = Workbook()
     worksheet = workbook.active
-    worksheet.title = "Hạch toán"
-    worksheet.append([
-        "ID", "Ngày lập", "Công ty bán", "MST bán", "Công ty mua",
-        "MST mua", "Số hóa đơn", "Tiền hàng", "Tiền VAT",
-        "Tổng thanh toán", "Tình trạng thanh toán",
-    ])
-    for cell in worksheet[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill(fill_type="solid", fgColor="334155")
-    for row in rows:
+    worksheet.title = "Sổ Hạch Toán"
+
+    # Title Banner Block
+    worksheet.merge_cells("A1:K1")
+    title_cell = worksheet["A1"]
+    title_cell.value = f"SỔ TỔNG HỢP HẠCH TOÁN HÓA ĐƠN — {period_label}"
+    title_cell.font = Font(size=14, bold=True, color="0F172A")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    worksheet.row_dimensions[1].height = 36
+
+    worksheet.merge_cells("A2:K2")
+    sub_cell = worksheet["A2"]
+    sub_cell.value = (
+        f"Kỳ báo cáo: {period_label}  |  "
+        f"Trạng thái thanh toán: {'Tất cả' if payment_status == 'all' else ('Đã thanh toán' if payment_status == 'paid' else 'Chưa thanh toán')}  |  "
+        f"Số lượng: {len(rows)} hóa đơn  |  "
+        f"Ngày trích xuất: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    sub_cell.font = Font(size=9.5, italic=True, color="64748B")
+    sub_cell.alignment = Alignment(horizontal="center", vertical="center")
+    worksheet.row_dimensions[2].height = 20
+
+    headers = [
+        "STT", "Mã HĐ (ID)", "Ngày lập", "Nhà cung cấp (Bên bán)", "Mã số thuế bán",
+        "Đơn vị mua", "Số hóa đơn", "Tiền hàng (VNĐ)", "Tiền VAT (VNĐ)",
+        "Tổng thanh toán (VNĐ)", "Trạng thái thanh toán",
+    ]
+    worksheet.append([])  # Row 3 blank spacer
+    worksheet.append(headers)  # Row 4
+    worksheet.row_dimensions[4].height = 28
+
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill(fill_type="solid", fgColor="1E293B")
+    thin_border = Border(
+        left=Side(style="thin", color="E2E8F0"),
+        right=Side(style="thin", color="E2E8F0"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+
+    for col_idx in range(1, len(headers) + 1):
+        cell = worksheet.cell(row=4, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    total_goods = 0.0
+    total_vat = 0.0
+    total_payment = 0.0
+
+    for idx, row in enumerate(rows, start=1):
+        goods = float(row.get("tong_tien_hang") or 0)
+        vat = float(row.get("tien_thue_vat") or 0)
+        payment = float(row.get("tong_thanh_toan") or 0)
+        total_goods += goods
+        total_vat += vat
+        total_payment += payment
+
+        p_status = "Đã thanh toán" if row.get("payment_status") == "paid" else "Chưa thanh toán"
+
         worksheet.append([
-            row.get("id"), row.get("ngay_lap"), row.get("ten_cong_ty_ban"),
-            row.get("ma_so_thue_ban"), row.get("ten_cong_ty_mua"),
-            row.get("ma_so_thue_mua"), row.get("so_hoa_don"),
-            row.get("tong_tien_hang"), row.get("tien_thue_vat"),
-            row.get("tong_thanh_toan"), row.get("payment_status", "unpaid"),
+            idx,
+            f"#{row.get('id', 0):04d}",
+            row.get("ngay_lap") or "",
+            row.get("ten_cong_ty_ban") or "",
+            row.get("ma_so_thue_ban") or "",
+            row.get("ten_cong_ty_mua") or "",
+            row.get("so_hoa_don") or "",
+            goods,
+            vat,
+            payment,
+            p_status,
         ])
-    worksheet.freeze_panes = "A2"
-    worksheet.auto_filter.ref = worksheet.dimensions
-    for column_cells in worksheet.columns:
-        column_letter = column_cells[0].column_letter
-        width = max(
-            (len(str(cell.value)) for cell in column_cells if cell.value is not None),
-            default=0,
-        )
-        worksheet.column_dimensions[column_letter].width = min(width + 2, 40)
+        curr_row = worksheet.max_row
+        worksheet.row_dimensions[curr_row].height = 22
+        for col_idx in range(1, len(headers) + 1):
+            cell = worksheet.cell(row=curr_row, column=col_idx)
+            cell.border = thin_border
+            if col_idx in (8, 9, 10):
+                cell.number_format = "#,##0"
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif col_idx in (1, 2, 3, 5, 7, 11):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    if rows:
+        summary_row = worksheet.max_row + 1
+        worksheet.cell(row=summary_row, column=1, value="TỔNG CỘNG").font = Font(bold=True, size=10)
+        worksheet.cell(row=summary_row, column=8, value=total_goods).number_format = "#,##0"
+        worksheet.cell(row=summary_row, column=9, value=total_vat).number_format = "#,##0"
+        worksheet.cell(row=summary_row, column=10, value=total_payment).number_format = "#,##0"
+        for c in range(1, len(headers) + 1):
+            cell = worksheet.cell(row=summary_row, column=c)
+            cell.font = Font(bold=True, size=10, color="0F172A")
+            cell.fill = PatternFill(fill_type="solid", fgColor="F1F5F9")
+            cell.border = thin_border
+        worksheet.row_dimensions[summary_row].height = 25
+
+    worksheet.freeze_panes = "A5"
+    worksheet.auto_filter.ref = f"A4:K{worksheet.max_row}"
+
+    for col in worksheet.columns:
+        col_letter = get_column_letter(col[0].column)
+        max_len = 0
+        for cell in col:
+            if cell.row in (1, 2):
+                continue
+            if cell.value is not None:
+                max_len = max(max_len, len(str(cell.value)))
+        worksheet.column_dimensions[col_letter].width = max(max_len + 3, 10)
 
     output = io.BytesIO()
     workbook.save(output)
@@ -872,7 +998,7 @@ def accounting_export(request: Request, payment_status: str = "all"):
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="invoices-accounting.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

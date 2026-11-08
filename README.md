@@ -27,8 +27,8 @@ Mã nguồn được tách thành `backend/` (FastAPI, Streamlit, OCR, database,
 
 Các màn hình React được chia riêng trong `frontend/src/page/`: `DashboardPage.tsx`, `UploadPage.tsx`, `HistoryPage.tsx`, `ExtractionPage.tsx`, `AccountingPage.tsx` và `ReportsPage.tsx`. `Workspace.tsx` giữ phần khung giao diện/điều hướng; `shared.tsx` và `utils.ts` chứa thành phần và hàm dùng chung giữa các trang.
 
-Tạo file `.env` và thêm API key:
-```env
+<!-- Tạo file `.env` và thêm API key:
+```env -->
 GEMINI_API_KEY=your_key_here
 XAI_API_KEY=your_xai_key_here
 # Tùy chọn; mặc định là grok-4.7
@@ -90,7 +90,7 @@ Các dòng `MYSQL_*` ở trên là ví dụ để chép vào `.env`; khai báo m
 
 ### Giao diện React (chuyển đổi từng bước)
 
-Frontend React hiện có đăng nhập/đăng ký, tổng quan, tải hóa đơn, lịch sử, trích xuất/chỉnh sửa dữ liệu, hạch toán, báo cáo, và đổi mật khẩu. FastAPI dùng chung tài khoản và database với ứng dụng hiện tại; Streamlit vẫn được giữ làm phương án dự phòng cho tới khi bản React được triển khai và kiểm thử trên hosting.
+Frontend React hiện có đăng nhập/đăng ký, tổng quan, tải hóa đơn, lịch sử, trích xuất/chỉnh sửa dữ liệu, hạch toán, báo cáo (chỉ dành cho admin), và đổi mật khẩu. FastAPI dùng chung tài khoản và database với ứng dụng hiện tại; Streamlit vẫn được giữ làm phương án dự phòng cho tới khi bản React được triển khai và kiểm thử trên hosting.
 
 Chạy API và frontend trong hai cửa sổ terminal trên Windows:
 

@@ -124,7 +124,7 @@ def render_sidebar(active_key: str):
 
         # 2. Menu điều hướng
         for item in NAV_ITEMS:
-            if not admin and item["key"] == "accounting":
+            if not admin and item["key"] in {"accounting", "report"}:
                 continue
             
             if item["key"] == active_key:

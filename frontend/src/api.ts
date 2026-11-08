@@ -103,14 +103,43 @@ export async function apiRequest<T>(
   return response as T
 }
 
-export async function downloadAccountingExcel(paymentStatus: string): Promise<void> {
-  const response = await apiRequest<Response>(
-    `/api/accounting/export?payment_status=${encodeURIComponent(paymentStatus)}`,
-  )
-  const url = URL.createObjectURL(await response.blob())
+export type AccountingExportOptions = {
+  paymentStatus?: string
+  month?: number | 'all'
+  year?: number | 'all'
+}
+
+export async function downloadAccountingExcel(
+  optionsOrStatus?: string | AccountingExportOptions,
+): Promise<void> {
+  const options: AccountingExportOptions =
+    typeof optionsOrStatus === 'string'
+      ? { paymentStatus: optionsOrStatus }
+      : optionsOrStatus ?? {}
+
+  const params = new URLSearchParams()
+  if (options.paymentStatus && options.paymentStatus !== 'all') {
+    params.set('payment_status', options.paymentStatus)
+  }
+  if (options.month !== undefined && options.month !== 'all') {
+    params.set('month', String(options.month))
+  }
+  if (options.year !== undefined && options.year !== 'all') {
+    params.set('year', String(options.year))
+  }
+
+  const query = params.toString() ? `?${params.toString()}` : ''
+  const response = await apiRequest<Response>(`/api/accounting/export${query}`)
+  const blob = await response.blob()
+
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const filenameMatch = disposition.match(/filename="?([^";]+)"?/)
+  const filename = filenameMatch ? filenameMatch[1] : 'hach_toan_hoa_don.xlsx'
+
+  const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = 'hoa_don_hach_toan_theo_bo_loc.xlsx'
+  anchor.download = filename
   document.body.append(anchor)
   anchor.click()
   anchor.remove()

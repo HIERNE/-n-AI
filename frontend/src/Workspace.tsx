@@ -15,7 +15,7 @@ const NAV_ITEMS: { id: Screen; title: string; icon: string; adminOnly?: boolean 
   { id: 'history', title: 'Lịch sử hóa đơn', icon: '◷' },
   { id: 'extract', title: 'Trích xuất dữ liệu', icon: '▤' },
   { id: 'accounting', title: 'Hạch toán kế toán', icon: '∑', adminOnly: true },
-  { id: 'reports', title: 'Báo cáo tổng hợp', icon: '▥' },
+  { id: 'reports', title: 'Báo cáo tổng hợp', icon: '▥', adminOnly: true },
 ]
 
 function PasswordDialog({ onClose, setNotice }: {
@@ -81,7 +81,8 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
   }, [user.role])
 
   function navigate(nextScreen: Screen) {
-    if (nextScreen === 'accounting' && user.role !== 'admin') return
+    const target = NAV_ITEMS.find((item) => item.id === nextScreen)
+    if (target?.adminOnly && user.role !== 'admin') return
     window.history.pushState({}, '', `/${nextScreen}`)
     setScreen(nextScreen)
     setMenuOpen(false)
@@ -176,7 +177,7 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
         {screen === 'history' && <HistoryPage setNotice={setNotice} user={user} />}
         {screen === 'extract' && <ExtractionPage setNotice={setNotice} user={user} />}
         {screen === 'accounting' && user.role === 'admin' && <AccountingPage setNotice={setNotice} />}
-        {screen === 'reports' && <ReportsPage user={user} />}
+        {screen === 'reports' && user.role === 'admin' && <ReportsPage user={user} />}
         {screen === 'upload' && <div className="upload-screen"><UploadPage setNotice={setNotice} /></div>}
       </main>
       {passwordOpen && <PasswordDialog onClose={() => setPasswordOpen(false)} setNotice={setNotice} />}

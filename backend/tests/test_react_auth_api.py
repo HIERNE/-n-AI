@@ -166,6 +166,29 @@ class ReactAuthenticationApiTests(unittest.TestCase):
             "Đang nhận dạng OCR.",
         )
 
+    def test_reports_are_only_available_to_admins(self):
+        self.client.post(
+            "/api/auth/login",
+            json={"username": "person@gmail.com", "password": "test-password"},
+        )
+
+        response = self.client.get("/api/reports")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_access_reports_for_all_users(self):
+        admin = {**self.user, "id": 1, "role": "admin"}
+        with (
+            patch.object(auth_api, "_current_user", return_value=admin),
+            patch.object(auth_api, "get_all_invoices", return_value=[]) as invoices,
+            patch.object(auth_api, "get_recent_jobs", return_value=[]) as jobs,
+        ):
+            response = self.client.get("/api/reports")
+
+        self.assertEqual(response.status_code, 200)
+        invoices.assert_called_once_with(user_id=admin["id"], is_admin=True)
+        jobs.assert_called_once_with(limit=100, user_id=admin["id"], is_admin=True)
+
     def test_accounting_export_returns_an_excel_workbook(self):
         self.client.post(
             "/api/auth/login",
