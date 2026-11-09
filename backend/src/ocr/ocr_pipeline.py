@@ -13,61 +13,37 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import glob
 
-_detector_engine = None
-_recognizer = None
+_ocr_engine = None
 _ENGINE_LOCK = Lock()
 
 
-def _get_ocr_engines():
-    global _detector_engine, _recognizer
-    if _detector_engine is None or _recognizer is None:
+def _get_ocr_engine():
+    global _ocr_engine
+    if _ocr_engine is None:
         with _ENGINE_LOCK:
-            if _detector_engine is None or _recognizer is None:
-                import torch  # Load PyTorch DLLs before importing PaddleOCR.
+            if _ocr_engine is None:
                 from paddleocr import PaddleOCR
-                from vietocr.tool.config import Cfg
-                from vietocr.tool.predictor import Predictor
 
-                torch.set_num_threads(1)
-                detector = PaddleOCR(use_angle_cls=False, lang="en", show_log=False)
-                config = Cfg.load_config_from_file(
-                    str(ROOT_DIR / "vietocr_config.yml")
+                _ocr_engine = PaddleOCR(
+                    use_angle_cls=False,
+                    lang="vi",
+                    show_log=False,
                 )
-                config["device"] = "cpu"
-                recognizer = Predictor(config)
-                _detector_engine = detector
-                _recognizer = recognizer
-    return _detector_engine, _recognizer
-
-
-def crop_box(image, box):
-    import numpy as np
-
-    box = np.array(box, dtype=np.float32)
-    x_min, x_max = int(np.min(box[:, 0])), int(np.max(box[:, 0]))
-    y_min, y_max = int(np.min(box[:, 1])), int(np.max(box[:, 1]))
-    return image[y_min:y_max, x_min:x_max], y_min, x_min
+    return _ocr_engine
 
 
 def run_ocr(image_path: str):
-    import cv2
-    from PIL import Image
+    if not Path(image_path).is_file():
+        raise FileNotFoundError(f"Không tìm thấy ảnh: {image_path}")
 
-    detector_engine, recognizer = _get_ocr_engines()
-    image = cv2.imread(image_path)
-    if image is None:
-        raise FileNotFoundError(f"Không đọc được ảnh: {image_path}")
-
-    det_result = detector_engine.ocr(image_path, det=True, rec=False, cls=False)
-    boxes = det_result[0]
+    ocr_engine = _get_ocr_engine()
+    result = ocr_engine.ocr(image_path, det=True, rec=True, cls=False)
+    lines = result[0] if result and result[0] else []
 
     extracted = []
-    for box in boxes:
-        cropped, y_min, x_min = crop_box(image, box)
-        if cropped.size == 0:
-            continue
-        cropped_pil = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
-        text = recognizer.predict(cropped_pil)
+    for box, (text, _) in lines:
+        x_min = int(min(point[0] for point in box))
+        y_min = int(min(point[1] for point in box))
         extracted.append({"text": text, "box": box, "y": y_min, "x": x_min})
 
     extracted.sort(key=lambda r: (round(r["y"] / 15), r["x"]))
