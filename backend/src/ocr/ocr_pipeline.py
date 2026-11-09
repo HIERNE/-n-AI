@@ -8,6 +8,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import glob
 
@@ -26,7 +28,8 @@ def _get_ocr_engines():
                 from vietocr.tool.config import Cfg
                 from vietocr.tool.predictor import Predictor
 
-                detector = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+                torch.set_num_threads(1)
+                detector = PaddleOCR(use_angle_cls=False, lang="en", show_log=False)
                 config = Cfg.load_config_from_file(
                     str(ROOT_DIR / "vietocr_config.yml")
                 )

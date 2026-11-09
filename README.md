@@ -113,6 +113,8 @@ Streamlit Community Cloud hiện vẫn chạy giao diện Streamlit cũ; nó kh�
 
 Repo có `render.yaml`, `Dockerfile` và `.dockerignore` để build frontend rồi chạy FastAPI trong cùng một web service. Blueprint cấu hình plan Standard và persistent disk 10 GB tại `/app/data` để các tệp hóa đơn không mất khi service restart. Kết quả OCR vẫn cần database TiDB/MySQL bền vững; không dùng SQLite làm database production.
 
+Để giảm RAM, API chỉ chạy tuần tự một job OCR, giới hạn luồng CPU và render PDF ở 150 DPI. Đây là biện pháp giảm đỉnh sử dụng, không bảo đảm PaddleOCR và VietOCR/PyTorch chạy ổn trong giới hạn 512 MB của gói Free; hãy theo dõi sự kiện OOM và nâng RAM nếu còn bị dừng.
+
 1. Đẩy các thay đổi lên GitHub, rồi trên Render chọn **New → Blueprint** và kết nối repository này.
 2. Trong phần environment của service, đặt `DATABASE_URL` tới TiDB, `GEMINI_API_KEY`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` mạnh và `ADMIN_EMAIL`. Render tự sinh `APP_AUTH_SECRET`; không tự thay bằng khóa dùng local.
 3. Nếu dùng domain riêng, đặt `APP_ALLOWED_ORIGINS` thành origin HTTPS chính xác, ví dụ `https://invoice.example.com` (không có dấu `/` cuối). URL `onrender.com` mặc định được nhận diện tự động.

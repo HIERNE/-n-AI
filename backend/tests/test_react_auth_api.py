@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -165,6 +166,50 @@ class ReactAuthenticationApiTests(unittest.TestCase):
             response.json()["history"][0]["progress_message"],
             "Đang nhận dạng OCR.",
         )
+
+    def test_invoice_ocr_jobs_run_one_at_a_time(self):
+        from src import pipeline
+
+        first_job_entered = threading.Event()
+        release_first_job = threading.Event()
+        active_jobs = 0
+        max_active_jobs = 0
+        active_jobs_lock = threading.Lock()
+
+        def process_invoice(*args, job_id, **kwargs):
+            nonlocal active_jobs, max_active_jobs
+            with active_jobs_lock:
+                active_jobs += 1
+                max_active_jobs = max(max_active_jobs, active_jobs)
+            try:
+                if job_id == 901:
+                    first_job_entered.set()
+                    if not release_first_job.wait(timeout=2):
+                        raise TimeoutError("Timed out waiting to release the first OCR job.")
+                return {"status": "success"}
+            finally:
+                with active_jobs_lock:
+                    active_jobs -= 1
+
+        with patch.object(pipeline, "process_invoice_with_job_tracking", side_effect=process_invoice):
+            first = threading.Thread(
+                target=auth_api._run_invoice_job,
+                args=(901, self.user["id"], "first.png", "", Path("first.png")),
+            )
+            second = threading.Thread(
+                target=auth_api._run_invoice_job,
+                args=(902, self.user["id"], "second.png", "", Path("second.png")),
+            )
+            first.start()
+            self.assertTrue(first_job_entered.wait(timeout=1))
+            second.start()
+            release_first_job.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(max_active_jobs, 1)
 
     def test_reports_are_only_available_to_admins(self):
         self.client.post(

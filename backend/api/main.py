@@ -51,6 +51,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEB_DIST = PROJECT_ROOT / "frontend" / "dist"
 _JOB_PROGRESS: dict[int, dict[str, Any]] = {}
 _JOB_PROGRESS_LOCK = Lock()
+_OCR_JOB_LOCK = Lock()
 COOKIE_NAME = "invoice_pro_session"
 SESSION_SECRET = os.getenv("APP_AUTH_SECRET", "")
 IS_PRODUCTION = os.getenv("APP_ENV", "").casefold() == "production"
@@ -287,47 +288,48 @@ def _run_invoice_job(
     source_hash: str,
     source_path: Path,
 ) -> None:
-    try:
-        from src.pipeline import process_invoice_with_job_tracking
-        from src.preprocessing.pdf_converter import pdf_to_images
+    with _OCR_JOB_LOCK:
+        try:
+            from src.pipeline import process_invoice_with_job_tracking
+            from src.preprocessing.pdf_converter import pdf_to_images
 
-        _set_job_progress(job_id, 2, "processing", "Đang chuyển đổi tệp và nhận dạng OCR.")
-        if source_path.suffix.lower() == ".pdf":
-            image_paths = pdf_to_images(source_path, output_dir=source_path.parent)
-        else:
-            image_paths = [str(source_path)]
-        result = process_invoice_with_job_tracking(
-            image_paths,
-            file_name=file_name,
-            job_id=job_id,
-            source_hash=source_hash,
-            user_id=user_id,
-            source_image=str(source_path),
-            stage_callback=lambda step, message: _set_job_progress(
-                job_id, step, "processing", message
-            ),
-        )
-        if result["status"] == "success":
-            _set_job_progress(job_id, 3, "success", "Đã xử lý hóa đơn hoàn tất.")
-        elif result["status"] == "failed":
+            _set_job_progress(job_id, 2, "processing", "Đang chuyển đổi tệp và nhận dạng OCR.")
+            if source_path.suffix.lower() == ".pdf":
+                image_paths = pdf_to_images(source_path, output_dir=source_path.parent)
+            else:
+                image_paths = [str(source_path)]
+            result = process_invoice_with_job_tracking(
+                image_paths,
+                file_name=file_name,
+                job_id=job_id,
+                source_hash=source_hash,
+                user_id=user_id,
+                source_image=str(source_path),
+                stage_callback=lambda step, message: _set_job_progress(
+                    job_id, step, "processing", message
+                ),
+            )
+            if result["status"] == "success":
+                _set_job_progress(job_id, 3, "success", "Đã xử lý hóa đơn hoàn tất.")
+            elif result["status"] == "failed":
+                progress = _get_job_progress(job_id)
+                _set_job_progress(
+                    job_id,
+                    progress["progress_step"] if progress else 3,
+                    "failed",
+                    "Không thể xử lý hóa đơn.",
+                    result.get("error"),
+                )
+        except Exception as error:
             progress = _get_job_progress(job_id)
             _set_job_progress(
                 job_id,
-                progress["progress_step"] if progress else 3,
+                progress["progress_step"] if progress else 2,
                 "failed",
                 "Không thể xử lý hóa đơn.",
-                result.get("error"),
+                str(error),
             )
-    except Exception as error:
-        progress = _get_job_progress(job_id)
-        _set_job_progress(
-            job_id,
-            progress["progress_step"] if progress else 2,
-            "failed",
-            "Không thể xử lý hóa đơn.",
-            str(error),
-        )
-        mark_job_failed(job_id, error_message=str(error), user_id=user_id)
+            mark_job_failed(job_id, error_message=str(error), user_id=user_id)
 
 
 @app.post("/api/auth/login")

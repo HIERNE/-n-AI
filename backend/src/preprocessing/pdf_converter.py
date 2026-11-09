@@ -9,6 +9,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import fitz  # PyMuPDF: PDF rendering without a system Poppler installation.
 from invoice_parser_config import RAW_DIR
 
+PDF_RENDER_DPI = 150
+
 
 def pdf_to_images(pdf_path: Path, output_dir: Path = RAW_DIR):
     pdf_path = Path(pdf_path)
@@ -30,14 +32,11 @@ def pdf_to_images(pdf_path: Path, output_dir: Path = RAW_DIR):
         if document.page_count == 0:
             raise ValueError("PDF không có trang nào để xử lý.")
 
-        scale = 200 / 72  # preserve the previous 200 DPI output resolution
+        scale = PDF_RENDER_DPI / 72
         matrix = fitz.Matrix(scale, scale)
         pdf_modified_at = pdf_path.stat().st_mtime
         for i, page in enumerate(document):
             img_path = output_dir / f"{pdf_name}_page{i + 1}.jpg"
-            if img_path.is_file() and img_path.stat().st_mtime >= pdf_modified_at:
-                saved_paths.append(str(img_path))
-                continue
             pixmap = page.get_pixmap(matrix=matrix, alpha=False)
             pixmap.save(str(img_path), jpg_quality=90)
             saved_paths.append(str(img_path))
