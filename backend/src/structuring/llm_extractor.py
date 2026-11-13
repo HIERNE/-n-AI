@@ -1,5 +1,7 @@
+import logging
 import json
 import re
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -16,6 +18,7 @@ from src.structuring.schemas import Invoice
 
 XAI_API_URL = "https://api.x.ai/v1/chat/completions"
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+LOGGER = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = """
 Từ đoạn text OCR sau (trích từ hóa đơn GTGT tiếng Việt), hãy trích xuất
@@ -37,7 +40,16 @@ thành JSON đúng theo cấu trúc sau, không thêm giải thích, không thê
   "tong_thanh_toan": 0
 }}
 
-Nếu không đọc được số hóa đơn trong OCR, hãy dùng null; không tự suy đoán.
+Nếu không đọc được số hóa đơn trong OCR, hãy dùng null; không tự suy đoán số hóa đơn và số tiền.
+
+QUY TẮC BẮT BUỘC VỀ DẤU TIẾNG VIỆT VÀ CHÍNH TẢ:
+1. Bạn phải khôi phục đầy đủ và chính xác 100% dấu tiếng Việt chuẩn ngữ pháp và ngữ cảnh cho:
+   - "ten_cong_ty_ban", "ten_cong_ty_mua"
+   - Tên từng mặt hàng trong "danh_sach_mat_hang" ("ten_hang")
+2. Tuyệt đối KHÔNG giữ lại các từ thiếu dấu hoặc sai dấu do lỗi OCR (ví dụ: 'thé hién' -> 'thể hiện', 'vé sinh' -> 'vệ sinh', 'thiét bi' -> 'thiết bị', 'mau trang tuyét' -> 'màu trắng tuyết', 'chac' -> 'chạc', 'd6' -> 'độ', 'Zäcco' -> 'Rắc co' / 'Zắc co').
+   Phải chuẩn hóa thành tiếng Việt có dấu hoàn chỉnh: 'Dây xịt vệ sinh', 'Mặt BS 3 thiết bị - màu trắng tuyết', 'Ba chạc 90 độ CB phun', v.v.
+3. Giữ nguyên các mã thông số kỹ thuật, kích thước bằng số/chữ tiếng Anh đi kèm (ví dụ: DN 25-3/4", PN 20, 149385V, D42, E27).
+4. Đảm bảo toàn bộ mặt hàng được trích xuất đầy đủ, chính xác số lượng, đơn giá và thành tiền tương ứng.
 
 Lưu ý: Các đoạn "=== TRANG n/t ===" thuộc cùng một hóa đơn nhiều trang. Hãy hợp nhất
 thông tin và toàn bộ mặt hàng từ tất cả các trang thành một hóa đơn duy nhất. Bỏ qua
@@ -77,7 +89,7 @@ def _generate_xai_content(prompt: str) -> str:
     )
 
     try:
-        with urlopen(request, timeout=90) as response:
+        with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
@@ -115,7 +127,7 @@ def _generate_deepseek_content(prompt: str) -> str:
     )
 
     try:
-        with urlopen(request, timeout=90) as response:
+        with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
@@ -134,7 +146,8 @@ def _generate_deepseek_content(prompt: str) -> str:
 
 def _generate_content(prompt: str) -> str:
     gemini_error = None
-    for api_key in GEMINI_API_KEYS:
+    for attempt, api_key in enumerate(GEMINI_API_KEYS, start=1):
+        provider_started = time.perf_counter()
         try:
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
@@ -143,16 +156,49 @@ def _generate_content(prompt: str) -> str:
             )
             if not response.text:
                 raise ValueError("Gemini trả về nội dung rỗng.")
+            LOGGER.info(
+                "invoice_pipeline stage=llm_provider provider=gemini attempt=%d status=success duration_seconds=%.2f",
+                attempt,
+                time.perf_counter() - provider_started,
+            )
             return response.text
         except Exception as error:
             gemini_error = error
+            LOGGER.warning(
+                "invoice_pipeline stage=llm_provider provider=gemini attempt=%d status=error error_type=%s duration_seconds=%.2f",
+                attempt,
+                type(error).__name__,
+                time.perf_counter() - provider_started,
+            )
 
+    provider_started = time.perf_counter()
     try:
-        return _generate_xai_content(prompt)
+        content = _generate_xai_content(prompt)
+        LOGGER.info(
+            "invoice_pipeline stage=llm_provider provider=xai status=success duration_seconds=%.2f",
+            time.perf_counter() - provider_started,
+        )
+        return content
     except Exception as xai_error:
+        LOGGER.warning(
+            "invoice_pipeline stage=llm_provider provider=xai status=error error_type=%s duration_seconds=%.2f",
+            type(xai_error).__name__,
+            time.perf_counter() - provider_started,
+        )
+        provider_started = time.perf_counter()
         try:
-            return _generate_deepseek_content(prompt)
+            content = _generate_deepseek_content(prompt)
+            LOGGER.info(
+                "invoice_pipeline stage=llm_provider provider=deepseek status=success duration_seconds=%.2f",
+                time.perf_counter() - provider_started,
+            )
+            return content
         except Exception as deepseek_error:
+            LOGGER.warning(
+                "invoice_pipeline stage=llm_provider provider=deepseek status=error error_type=%s duration_seconds=%.2f",
+                type(deepseek_error).__name__,
+                time.perf_counter() - provider_started,
+            )
             errors = (
                 f"Lỗi Gemini: {gemini_error}. "
                 f"Lỗi xAI: {xai_error}. "

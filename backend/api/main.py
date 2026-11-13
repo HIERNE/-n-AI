@@ -40,6 +40,8 @@ from src.storage.db_handler import (
     initialize_database,
     mark_job_duplicate,
     mark_job_failed,
+    mark_job_cancelled,
+    reset_job_to_processing,
     register_user,
     set_invoice_accounting_status,
     set_invoice_payment_status,
@@ -298,6 +300,18 @@ def _run_invoice_job(
                 image_paths = pdf_to_images(source_path, output_dir=source_path.parent)
             else:
                 image_paths = [str(source_path)]
+
+            # Check if cancelled before running heavy OCR / structuring
+            p = _get_job_progress(job_id)
+            if p and p.get("progress_status") == "cancelled":
+                return
+
+            def _stage_cb(step, message):
+                current_p = _get_job_progress(job_id)
+                if current_p and current_p.get("progress_status") == "cancelled":
+                    raise InterruptedError("Xử lý hóa đơn đã bị người dùng hủy.")
+                _set_job_progress(job_id, step, "processing", message)
+
             result = process_invoice_with_job_tracking(
                 image_paths,
                 file_name=file_name,
@@ -305,9 +319,7 @@ def _run_invoice_job(
                 source_hash=source_hash,
                 user_id=user_id,
                 source_image=str(source_path),
-                stage_callback=lambda step, message: _set_job_progress(
-                    job_id, step, "processing", message
-                ),
+                stage_callback=_stage_cb,
             )
             if result["status"] == "success":
                 _set_job_progress(job_id, 3, "success", "Đã xử lý hóa đơn hoàn tất.")
@@ -320,8 +332,13 @@ def _run_invoice_job(
                     "Không thể xử lý hóa đơn.",
                     result.get("error"),
                 )
+        except InterruptedError:
+            # Job was cancelled intentionally by user
+            return
         except Exception as error:
             progress = _get_job_progress(job_id)
+            if progress and progress.get("progress_status") == "cancelled":
+                return
             _set_job_progress(
                 job_id,
                 progress["progress_step"] if progress else 2,
@@ -438,9 +455,17 @@ def history(request: Request):
             row["progress_status"] = "success"
         elif row["status"] == "failed":
             row["progress_status"] = "failed"
+            row["progress_error"] = row.get("error_message") or row.get("error_reason") or "Xử lý thất bại"
+        elif row["status"] == "cancelled":
+            row["progress_status"] = "cancelled"
+            row["progress_error"] = row.get("error_message") or row.get("error_reason") or "Đã hủy bởi người dùng"
         elif row["status"] == "processing":
             row["progress_step"] = 2
             row["progress_status"] = "processing"
+
+        # Ensure error details are always propagated
+        if row["status"] in {"failed", "cancelled"} and not row.get("progress_error"):
+            row["progress_error"] = row.get("error_message") or row.get("error_reason") or "Xử lý thất bại"
     return {"history": rows}
 
 
@@ -467,7 +492,7 @@ def retry_job(job_id: int, request: Request, background_tasks: BackgroundTasks):
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy công việc.")
-    if job["status"] not in {"failed", "processing"}:
+    if job["status"] not in {"failed", "processing", "cancelled"}:
         raise HTTPException(status_code=409, detail="Công việc này không cần thử lại.")
     source_path = Path(job["source_image"]) if job.get("source_image") else None
     if source_path is None:
@@ -476,11 +501,20 @@ def retry_job(job_id: int, request: Request, background_tasks: BackgroundTasks):
         source_path = PROJECT_ROOT / source_path
     try:
         resolved_source = source_path.resolve(strict=True)
-        resolved_source.relative_to(
-            (PROJECT_ROOT / "data" / "uploads" / f"user_{user['id']}").resolve()
-        )
+        if user["role"] != "admin":
+            try:
+                resolved_source.relative_to(
+                    (PROJECT_ROOT / "data" / "uploads" / f"user_{user['id']}").resolve()
+                )
+            except ValueError:
+                # Also allow data/raw if available
+                resolved_source.relative_to(PROJECT_ROOT / "data")
     except (OSError, ValueError) as error:
         raise HTTPException(status_code=404, detail="Không tìm thấy tệp nguồn trên máy chủ.") from error
+
+    reset_job_to_processing(job_id, user_id=user["id"])
+    _set_job_progress(job_id, 1, "processing", "Đang chuẩn bị thử lại xử lý hóa đơn.")
+
     background_tasks.add_task(
         _run_invoice_job,
         job_id,
@@ -490,6 +524,30 @@ def retry_job(job_id: int, request: Request, background_tasks: BackgroundTasks):
         resolved_source,
     )
     return {"job_id": job_id, "status": "processing"}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: int, request: Request):
+    _check_request_origin(request)
+    user = _current_user(request)
+    job = get_job_by_id(
+        job_id,
+        user_id=user["id"],
+        is_admin=user["role"] == "admin",
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy công việc.")
+    if job["status"] != "processing":
+        raise HTTPException(status_code=400, detail="Chỉ có thể dừng công việc đang xử lý.")
+    mark_job_cancelled(job_id, user_id=user["id"], is_admin=user["role"] == "admin")
+    _set_job_progress(
+        job_id,
+        2,
+        "cancelled",
+        "Đã dừng xử lý theo yêu cầu của người dùng.",
+        "Người dùng đã chủ động dừng xử lý hóa đơn.",
+    )
+    return {"job_id": job_id, "status": "cancelled", "message": "Đã dừng xử lý hóa đơn thành công."}
 
 
 @app.post("/api/uploads", status_code=202)

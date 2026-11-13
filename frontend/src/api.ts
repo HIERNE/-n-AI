@@ -40,9 +40,11 @@ export type HistoryRow = {
   source_image: string | null
   status: 'success' | 'duplicate' | 'processing' | 'failed' | 'cancelled'
   progress_step?: number
-  progress_status?: 'success' | 'duplicate' | 'processing' | 'failed'
+  progress_status?: 'success' | 'duplicate' | 'processing' | 'failed' | 'cancelled'
   progress_message?: string
   progress_error?: string | null
+  error_message?: string | null
+  error_reason?: string | null
   created_at: string | null
   ma_so_thue_ban: string | null
   ten_cong_ty_ban: string | null
@@ -144,6 +146,14 @@ export async function downloadAccountingExcel(
   anchor.click()
   anchor.remove()
   URL.revokeObjectURL(url)
+}
+
+export async function retryJob(jobId: number): Promise<{ job_id: number; status: string }> {
+  return apiRequest<{ job_id: number; status: string }>(`/api/jobs/${jobId}/retry`, { method: 'POST' })
+}
+
+export async function cancelJob(jobId: number): Promise<{ job_id: number; status: string; message: string }> {
+  return apiRequest<{ job_id: number; status: string; message: string }>(`/api/jobs/${jobId}/cancel`, { method: 'POST' })
 }
 
 export function getErrorMessage(error: unknown): string {

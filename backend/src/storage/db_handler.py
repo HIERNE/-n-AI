@@ -170,12 +170,10 @@ def _ensure_jobs_table(engine, bootstrap_admin: bool = True) -> None:
             ))
         if "user_id" not in columns:
             conn.execute(text("ALTER TABLE processing_jobs ADD COLUMN user_id INTEGER"))
-        legacy_error_columns = columns.intersection({"error_message", "error_reason"})
-        if legacy_error_columns:
-            conn.execute(text(
-                "UPDATE processing_jobs SET "
-                + ", ".join(f"{column} = NULL" for column in sorted(legacy_error_columns))
-            ))
+        if "error_message" not in columns:
+            conn.execute(text("ALTER TABLE processing_jobs ADD COLUMN error_message TEXT"))
+        if "error_reason" not in columns:
+            conn.execute(text("ALTER TABLE processing_jobs ADD COLUMN error_reason VARCHAR(255)"))
     _ensure_auth_table(engine, bootstrap_admin=bootstrap_admin)
     if "invoices" in inspect(engine).get_table_names():
         with engine.begin() as conn:
@@ -799,6 +797,8 @@ FRIENDLY_ERROR_RULES = [
      "Lỗi khi chuyển đổi file PDF sang ảnh"),
     (("không đọc được ảnh", "filenotfound"),
      "Không đọc được file ảnh/PDF đã tải lên"),
+    (("application control", "blocked this file", "_extrema_cy", "dll load failed"),
+     "Chính sách bảo mật Windows (Smart App Control) đã chặn DLL; đã được hệ thống tự động xử lý an toàn, vui lòng bấm Thử lại"),
 ]
 
 
@@ -958,16 +958,55 @@ def mark_job_failed(
     from src.logging_config import get_app_logger
 
     get_app_logger().error("Invoice processing job %s failed: %s", job_id, error_message)
+    friendly_reason = get_friendly_error_reason(error_message)
     engine = _make_engine()
     with engine.begin() as conn:
         result = conn.execute(
             text("""
                 UPDATE processing_jobs
-                SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+                SET status = 'failed',
+                    error_message = :error_message,
+                    error_reason = :error_reason,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = :id AND (:user_id IS NULL OR user_id = :user_id)
+            """),
+            {
+                "id": job_id,
+                "error_message": error_message,
+                "error_reason": friendly_reason,
+                "user_id": user_id,
+            },
+        )
+
+def mark_job_cancelled(
+    job_id: int, user_id: int | None = None, is_admin: bool = False
+) -> None:
+    from src.logging_config import get_app_logger, log_activity
+
+    get_app_logger().info("Invoice processing job %s cancelled by user %s", job_id, user_id)
+    engine = _make_engine()
+    with engine.begin() as conn:
+        ownership = "1 = 1" if is_admin or user_id is None else "user_id = :user_id"
+        result = conn.execute(
+            text(f"""
+                UPDATE processing_jobs
+                SET status = 'cancelled',
+                    error_message = 'Người dùng đã dừng xử lý hóa đơn.',
+                    error_reason = 'Đã hủy bởi người dùng',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND {ownership}
             """),
             {"id": job_id, "user_id": user_id},
         )
+    if result.rowcount:
+        log_activity(
+            "invoice_processing_cancelled",
+            user_id=user_id,
+            resource_type="processing_job",
+            resource_id=job_id,
+            status="cancelled",
+        )
+
     if result.rowcount:
         from src.logging_config import log_activity
 
@@ -1088,6 +1127,8 @@ def get_full_history(user_id: int | None = None, is_admin: bool = False) -> list
                     ELSE j.status
                 END AS status,
                 j.created_at,
+                j.error_message,
+                j.error_reason,
                 i.ma_so_thue_ban, i.ten_cong_ty_ban, i.so_hoa_don,
                 i.ngay_lap, i.tong_thanh_toan,
                 CASE
@@ -1251,7 +1292,10 @@ def reset_job_to_processing(job_id: int, user_id: int | None = None) -> None:
         conn.execute(
             text("""
                 UPDATE processing_jobs
-                SET status = 'processing', updated_at = CURRENT_TIMESTAMP
+                SET status = 'processing',
+                    error_message = NULL,
+                    error_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = :id AND (:user_id IS NULL OR user_id = :user_id)
             """),
             {"id": job_id, "user_id": user_id},
@@ -1422,7 +1466,7 @@ __all__ = [
     "update_invoice_data", "set_invoice_accounting_status",
     "set_invoice_payment_status",
     "create_job", "get_upload_duplicate_candidates",
-    "mark_job_success", "mark_job_duplicate", "mark_job_failed",
+    "mark_job_success", "mark_job_duplicate", "mark_job_failed", "mark_job_cancelled",
     "get_duplicate_cleanup_preview", "cleanup_duplicate_invoices",
     "get_job_counts", "get_recent_jobs", "get_jobs_by_ids", "get_all_jobs",
     "get_friendly_error_reason",

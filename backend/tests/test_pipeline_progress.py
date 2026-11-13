@@ -16,6 +16,7 @@ class InvoicePipelineProgressTests(unittest.TestCase):
                 side_effect=[[{"text": "invoice page one"}], [{"text": "invoice page two"}]],
             ) as run_ocr,
             patch.object(pipeline, "extract_invoice_data", return_value=invoice),
+            self.assertLogs("src.pipeline", level="INFO") as logs,
         ):
             result = pipeline.extract_invoice(
                 ["page-one.jpg", "page-two.jpg"],
@@ -27,6 +28,8 @@ class InvoicePipelineProgressTests(unittest.TestCase):
         self.assertEqual([step for step, _ in stage_updates], [2, 3])
         self.assertIn("OCR", stage_updates[0][1])
         self.assertIn("trích xuất", stage_updates[1][1])
+        self.assertTrue(any("stage=ocr page=1/2" in line for line in logs.output))
+        self.assertTrue(any("stage=llm_extraction" in line for line in logs.output))
 
 
 if __name__ == "__main__":

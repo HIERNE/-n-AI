@@ -6,7 +6,11 @@ pdf2image==1.17.0 #Chuyển đổi các file hóa đơn dạng PDF thành file �
 PyMuPDF==1.24.10 # Thư viện đọc/xử lý file PDF hiệu năng cao (trích xuất ảnh, thông tin PDF)
 
 paddlepaddle==2.6.2 # Framework AI nền tảng chạy mô hình PaddleOCR
-paddleocr==2.8.1 # Phát hiện vùng chữ và nhận dạng văn bản tiếng Việt trên hóa đơn
+paddleocr==2.8.1 # Phát hiện vùng chữ trên hóa đơn
+vietocr==0.3.13 # Nhận dạng chữ tiếng Việt có dấu
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1+cpu # Framework CPU cho bộ nhận dạng VietOCR
+torchvision==0.19.1+cpu
 
 google-genai==0.3.0 # Gọi API để biến text thô thành JSON
 pydantic==2.9.2 # Định nghĩa khung dữ liệu (schemas.py) và validate định dạng dữ liệu trả về từ AI

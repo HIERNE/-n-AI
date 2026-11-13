@@ -1,7 +1,8 @@
 # Invoice Pro
 
 Hệ thống tự động trích xuất và số hóa thông tin hóa đơn GTGT (hóa đơn đỏ)
-sử dụng PaddleOCR để nhận dạng tiếng Việt và dịch vụ xử lý ngôn ngữ để cấu trúc hóa dữ liệu.
+sử dụng PaddleOCR để phát hiện vùng chữ, VietOCR để nhận dạng tiếng Việt có dấu
+và dịch vụ xử lý ngôn ngữ để cấu trúc hóa dữ liệu.
 
 ## Tính năng chính
 - Trích xuất tự động: MST, tên công ty, ngày lập, danh sách mặt hàng, tổng tiền, thuế VAT
@@ -113,7 +114,7 @@ Streamlit Community Cloud hiện vẫn chạy giao diện Streamlit cũ; nó kh�
 
 Repo có `render.yaml`, `Dockerfile` và `.dockerignore` để build frontend rồi chạy FastAPI trong cùng một web service. Blueprint cấu hình plan Standard và persistent disk 10 GB tại `/app/data` để các tệp hóa đơn không mất khi service restart. Kết quả OCR vẫn cần database TiDB/MySQL bền vững; không dùng SQLite làm database production.
 
-Để giảm RAM, API chỉ chạy tuần tự một job OCR, giới hạn luồng CPU và render PDF ở 150 DPI. PaddleOCR xử lý cả phát hiện và nhận dạng tiếng Việt, không tải thêm VietOCR/PyTorch. Gói Free vẫn có thể thiếu RAM; hãy theo dõi sự kiện OOM và nâng RAM nếu còn bị dừng.
+OCR dùng PaddleOCR để phát hiện vùng chữ và VietOCR để nhận dạng tiếng Việt có dấu. API chỉ chạy tuần tự một job OCR, giới hạn luồng CPU và render PDF ở 150 DPI. Gói Render Free 512 MB vẫn có thể thiếu RAM; thời gian thực tế cần đo trên hosting sau khi deploy.
 
 1. Đẩy các thay đổi lên GitHub, rồi trên Render chọn **New → Blueprint** và kết nối repository này.
 2. Trong phần environment của service, đặt `DATABASE_URL` tới TiDB, `GEMINI_API_KEY`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` mạnh và `ADMIN_EMAIL`. Render tự sinh `APP_AUTH_SECRET`; không tự thay bằng khóa dùng local.
@@ -183,7 +184,7 @@ python -m src.evaluation.extraction_metrics
 Xem chi tiết trong `docs/architecture_diagram.png`
 
 ## Công nghệ sử dụng
-- **OCR**: PaddleOCR (phát hiện và nhận dạng văn bản tiếng Việt)
+- **OCR**: PaddleOCR (phát hiện dòng chữ), VietOCR (nhận dạng tiếng Việt có dấu)
 - **Structuring**: Gemini, dịch vụ dự phòng, DeepSeek API + Pydantic
 - **UI**: Streamlit (ứng dụng hiện tại), React + TypeScript (bản chuyển đổi)
 - **API**: FastAPI
