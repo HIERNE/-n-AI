@@ -122,7 +122,7 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
           <img src="/invoiceai_logo.png" alt="Invoice Pro" />
           <div className="sidebar-brand-text">
             <strong>Invoice Pro</strong>
-            <small>Nền tảng hóa đơn thông minh</small>
+            <small>Xử lý hóa đơn thông minh</small>
           </div>
         </a>
         <div className="sidebar-label">KHÔNG GIAN LÀM VIỆC</div>
